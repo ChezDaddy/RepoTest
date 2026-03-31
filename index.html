@@ -402,6 +402,7 @@
     };
 
     /* ── ADMIN PANEL ── */
+    const AdminPanel = ({ cafes, onCafeCreated }) => {
       const [users,setUsers]     = useState(loadUsers());
       const [editPwd,setEditPwd] = useState({});
       const [newCafe,setNewCafe] = useState({nom:"",login:"",pwd:""});
