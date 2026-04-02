@@ -749,7 +749,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const upd = (i,d)=>setPanier(p=>{const c=[...p];c[i]={...c[i],qte:Math.max(1,c[i].qte+d)};return c;});
       const rem = (i)=>setPanier(p=>p.filter((_,j)=>j!==i));
       const valider = async()=>{ if(!panier.length||!date)return; const now=Date.now(); const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo})); const upd=[...nr,...rows]; setRows(upd); await saveData(cafe,"caisseta",upd); setPanier([]); };
-      const del = async(id)=>{ const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"caisseta",u); setConfirmId(null); };
+      const del = async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"caisseta",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       const softs=carte.filter(c=>c.type==="Soft"), alcools=carte.filter(c=>c.type==="Alcool"), nourr=carte.filter(c=>c.type==="Snacking");
       return (
@@ -801,7 +801,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       useEffect(()=>{loadData(cafe,"tcam").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const puV=parseFloat(f.pu)||0, qteV=parseFloat(f.qte)||0, hasC=puV>0&&qteV>0, tot=hasC?parseFloat((puV*qteV).toFixed(2)):(parseFloat(f.montant)||0);
       const submit=async()=>{ if(!f.evenement||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),evenement:f.evenement,pu:puV,qte:qteV||null,montant:tot,mode:f.mode,commentaire:f.commentaire}; const upd=[nr,...rows]; setRows(upd); await saveData(cafe,"tcam",upd); setF(x=>({...x,evenement:"",pu:"",qte:"",montant:"",commentaire:""})); };
-      const del=async(id)=>{ const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"tcam",u); setConfirmId(null); };
+      const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"tcam",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
         <div className="space-y-6">
@@ -835,7 +835,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),produit:"Don",montant:"",mode:"CB",recu_fiscal:"non",commentaire:""});
       useEffect(()=>{loadData(cafe,"dons").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const submit=async()=>{ if(!f.montant||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),produit:f.produit,montant:parseFloat(f.montant),mode:f.mode,recu_fiscal:f.recu_fiscal,commentaire:f.commentaire}; const upd=[nr,...rows]; setRows(upd); await saveData(cafe,"dons",upd); setF(x=>({...x,montant:"",commentaire:""})); };
-      const del=async(id)=>{ const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"dons",u); setConfirmId(null); };
+      const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"dons",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
         <div className="space-y-6">
@@ -869,7 +869,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),fournisseur:"",destination:"TCAM+TA",montant:"",mode:"CB",no_facture:"",facture_teams:"non"});
       useEffect(()=>{loadData(cafe,"achats").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const submit=async()=>{ if(!f.fournisseur||!f.montant)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),fournisseur:f.fournisseur,destination:f.destination,montant:parseFloat(f.montant),mode:f.mode,no_facture:f.no_facture,facture_teams:f.facture_teams}; const upd=[nr,...rows]; setRows(upd); await saveData(cafe,"achats",upd); setF(x=>({...x,fournisseur:"",montant:"",no_facture:""})); };
-      const del=async(id)=>{ const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"achats",u); setConfirmId(null); };
+      const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"achats",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
         <div className="space-y-6">
@@ -904,7 +904,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const [f,setF]=useState({date_evenement:"",client:"",montant_devis:"",devis_accepte:"OUI",montant_facture:"",date_reglement:"",mode:"Chèque"});
       useEffect(()=>{loadData(cafe,"privatisation").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const submit=async()=>{ if(!f.client)return; const nr={id:Date.now(),...f,semaine:getWeekForDate(f.date_evenement),mois:getMonthForDate(f.date_evenement),montant_devis:parseFloat(f.montant_devis)||0,montant_facture:parseFloat(f.montant_facture)||0}; const upd=[nr,...rows]; setRows(upd); await saveData(cafe,"privatisation",upd); setF({date_evenement:"",client:"",montant_devis:"",devis_accepte:"OUI",montant_facture:"",date_reglement:"",mode:"Chèque"}); };
-      const del=async(id)=>{ const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"privatisation",u); setConfirmId(null); };
+      const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"privatisation",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
         <div className="space-y-6">
@@ -1300,7 +1300,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
         setForm(mkAdhForm());
       };
 
-      const del = async (id) => { const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"adhesion",u); setConfirmId(null); };
+      const del = async (id) => { setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"adhesion",u); };
 
       if(loading) return <div className="p-8 text-center text-gray-400">Chargement...</div>;
 
@@ -1573,7 +1573,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
         setPanier([]);
       };
 
-      const del = async(id)=>{ const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"restocollective",u); setConfirmId(null); };
+      const del = async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"restocollective",u); };
 
       if(loading) return <div className="p-8 text-center text-gray-400">Chargement...</div>;
 
