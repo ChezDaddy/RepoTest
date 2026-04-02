@@ -21,14 +21,54 @@
 
     /* ── SUPABASE ── */
     const SUPA_URL = "https://hhxuumexyvoxomoarmul.supabase.co";
-    const SUPA_KEY = "sb_publishable_k-fu1nVc1vY_8w7TBr6ilA_2I9GXQH7";
+    const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhoeHV1bWV4eXZveG9tb2FybXVsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwMjEzNTIsImV4cCI6MjA5MDU5NzM1Mn0.ifBaeLJVr1e9qJonZdGB9XqaWXXYrn5vJUrvw72NRqw";
+    const SUPA_TIMEOUT = 8000; // 8s max par requête
+
     const supaFetch = async (path, opts={}) => {
-      const r = await fetch(SUPA_URL + path, {
-        ...opts,
-        headers: { "apikey": SUPA_KEY, "Authorization": "Bearer " + SUPA_KEY, "Content-Type": "application/json", "Prefer": "return=representation", ...(opts.headers||{}) }
-      });
-      if (!r.ok) { const t = await r.text(); console.error("Supabase error", r.status, t); return null; }
-      return r.json();
+      const controller = new AbortController();
+      const timer = setTimeout(()=>controller.abort(), SUPA_TIMEOUT);
+      try {
+        const r = await fetch(SUPA_URL + path, {
+          ...opts,
+          signal: controller.signal,
+          headers: { "apikey": SUPA_KEY, "Authorization": "Bearer " + SUPA_KEY,
+            "Content-Type": "application/json", "Prefer": "return=representation",
+            ...(opts.headers||{}) }
+        });
+        clearTimeout(timer);
+        if (!r.ok) { const t = await r.text(); console.error("Supabase error", r.status, t); return null; }
+        // 204 No Content (succès sans body)
+        if (r.status === 204) return true;
+        return r.json();
+      } catch(e) {
+        clearTimeout(timer);
+        console.error("supaFetch error:", e.message);
+        return null;
+      }
+    };
+
+    /* File d'attente pour les sauvegardes ratées — retry en arrière-plan */
+    const _saveQueue = [];
+    let _saveRunning = false;
+    const _flushQueue = async () => {
+      if (_saveRunning || _saveQueue.length===0) return;
+      _saveRunning = true;
+      while (_saveQueue.length > 0) {
+        const {cafe, section, data, resolve} = _saveQueue[0];
+        const res = await supaFetch("/rest/v1/daddy_data", {
+          method: "POST",
+          headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ cafe, section, data, updated_at: new Date().toISOString() })
+        });
+        if (res !== null) {
+          _saveQueue.shift();
+          resolve(true);
+        } else {
+          // Réessayer dans 5s
+          await new Promise(r=>setTimeout(r,5000));
+        }
+      }
+      _saveRunning = false;
     };
 
     /* ── AUTH ── */
@@ -62,7 +102,7 @@
     const RC_KEY = "daddy_rc_enabled"; // { "Croix-Rousse": true, ... }
     const loadRCEnabled = () => { try { const r=localStorage.getItem(RC_KEY); return r?JSON.parse(r):{}; } catch { return {}; } };
     const saveRCEnabled = (o) => { try { localStorage.setItem(RC_KEY, JSON.stringify(o)); } catch {} };
-    const TVA_RATES = { Nourriture: 0.10, Soft: 0.20, Alcool: 0.20 };
+    const TVA_RATES = { Snacking: 0.10, Soft: 0.20, Alcool: 0.20 };
 
     /* ── EMAILJS CONFIG ── (à renseigner dans le panneau Admin) */
     const EMAILJS_KEY   = "daddy_emailjs";
@@ -91,9 +131,26 @@
     };
 
     /* ── BUILD CSV STRING (sans téléchargement) ── */
+    const CSV_COL_ORDER = [
+      "TVA","Café","Section",
+      "date","semaine","mois",
+      "produit","evenement","fournisseur","client",
+      "typo","type","destination",
+      "qte","prix_unitaire","pu",
+      "montant","prix_total","montant_facture","montant_devis",
+      "tva_rate","tva_unitaire","tva_total","ht_unitaire","ht_total",
+      "mode","recu_fiscal","facture_teams","devis_accepte",
+      "no_facture","date_evenement","date_reglement","commentaire","id"
+    ];
+    const sortedHeaders = (rows) => {
+      const allKeys = [...new Set(rows.flatMap(r=>Object.keys(r)))];
+      const ordered = CSV_COL_ORDER.filter(k=>allKeys.includes(k));
+      const rest = allKeys.filter(k=>!CSV_COL_ORDER.includes(k));
+      return [...ordered, ...rest];
+    };
     const buildCSVString = (rows) => {
       if (!rows.length) return "";
-      const headers = [...new Set(rows.flatMap(r=>Object.keys(r)))];
+      const headers = sortedHeaders(rows);
       const escape = (v) => { const s=(v===null||v===undefined)?"":String(v).replace(/[\r\n]+/g," "); return s.includes(";")||s.includes('"')?`"${s.replace(/"/g,'""')}"`  :s; };
       return [headers.map(escape).join(";"), ...rows.map(r=>headers.map(h=>escape(r[h])).join(";"))].join("\n");
     };
@@ -265,37 +322,54 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     };
     const getWeekForDate  = (s) => { if (!s) return ""; const d = new Date(s); for (const w of WEEKS_2026) { if (d >= w.start && d <= w.end) return w.label; } return ""; };
     const getMonthForDate = (s) => { if (!s) return null; return new Date(s).getMonth() + 1; };
-    /* ── Cache mémoire Supabase ── */
+    /* ── Cache mémoire Supabase + fallback localStorage ── */
     const _dataCache = new Map();
+    const _lsKey = (cafe, section) => `daddy_fb_${cafe}_${section}`;
+
     const loadData = async (cafe, section) => {
       const k = cafe + ":" + section;
       if (_dataCache.has(k)) return _dataCache.get(k);
       try {
         const rows = await supaFetch(`/rest/v1/daddy_data?cafe=eq.${encodeURIComponent(cafe)}&section=eq.${encodeURIComponent(section)}&select=data`);
-        const v = (rows && rows[0]) ? rows[0].data : [];
+        if (rows !== null) {
+          const v = (rows && rows[0]) ? rows[0].data : [];
+          _dataCache.set(k, v);
+          // Mettre à jour le fallback localStorage
+          try { localStorage.setItem(_lsKey(cafe,section), JSON.stringify(v)); } catch{}
+          return v;
+        }
+        // Supabase KO → fallback localStorage
+        const fb = localStorage.getItem(_lsKey(cafe,section));
+        const v = fb ? JSON.parse(fb) : [];
         _dataCache.set(k, v);
         return v;
-      } catch { return []; }
+      } catch {
+        const fb = localStorage.getItem(_lsKey(cafe,section));
+        const v = fb ? JSON.parse(fb) : [];
+        _dataCache.set(k, v);
+        return v;
+      }
     };
+
     const saveData = async (cafe, section, data) => {
       const k = cafe + ":" + section;
       _dataCache.set(k, data);
-      try {
-        const res = await supaFetch("/rest/v1/daddy_data", {
-          method: "POST",
-          headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
-          body: JSON.stringify({ cafe, section, data, updated_at: new Date().toISOString() })
-        });
-        if (res === null) { // supaFetch retourne null si !r.ok
-          window.dispatchEvent(new CustomEvent("daddy_save_error", { detail: { cafe, section } }));
-          return false;
-        }
-        return true;
-      } catch (e) {
-        console.error(e);
+      // Toujours sauvegarder en localStorage en premier (instantané)
+      try { localStorage.setItem(_lsKey(cafe,section), JSON.stringify(data)); } catch{}
+      // Puis Supabase
+      const res = await supaFetch("/rest/v1/daddy_data", {
+        method: "POST",
+        headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({ cafe, section, data, updated_at: new Date().toISOString() })
+      });
+      if (res === null) {
+        // Mise en file d'attente pour retry automatique
+        await new Promise(resolve => { _saveQueue.push({cafe, section, data, resolve}); });
+        _flushQueue();
         window.dispatchEvent(new CustomEvent("daddy_save_error", { detail: { cafe, section } }));
         return false;
       }
+      return true;
     };
     const invalidateCache = (cafe, section) => { _dataCache.delete(cafe + ":" + section); };
 
@@ -345,7 +419,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       { id:"vin",      label:"Verre de vin",      prix:3.0, type:"Alcool" },
       { id:"kir",      label:"Kir",               prix:3.5, type:"Alcool" },
       { id:"biere_sa", label:"Bière sans alcool", prix:3.0, type:"Alcool" },
-      { id:"madeleine",label:"Madeleine",         prix:0.5, type:"Nourriture" },
+      { id:"madeleine",label:"Madeleine",         prix:0.5, type:"Snacking" },
     ];
     const MODES = ["CB","Espèces","Chèque","Virement"];
     const DESTINATIONS_ACHATS = ["TCAM+TA","Petits investissements","Evénementiel"];
@@ -353,7 +427,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     /* ── CSV EXPORT ── */
     const buildAndDownloadCSV = (rows, filename) => {
       if (rows.length === 0) { alert("Aucune donnée à exporter pour cette période."); return; }
-      const headers = [...new Set(rows.flatMap(r => Object.keys(r)))];
+      const headers = sortedHeaders(rows);
       const escape  = (v) => { const s = (v === null || v === undefined) ? "" : String(v).replace(/[\r\n]+/g," "); return s.includes(";") || s.includes('"') ? `"${s.replace(/"/g,'""')}"` : s; };
       const csv = [headers.map(escape).join(";"), ...rows.map(r => headers.map(h => escape(r[h])).join(";"))].join("\n");
       const blob = new Blob(["\uFEFF" + csv], { type:"text/csv;charset=utf-8;" });
@@ -677,7 +751,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const valider = async()=>{ if(!panier.length||!date)return; const now=Date.now(); const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo})); const upd=[...nr,...rows]; setRows(upd); await saveData(cafe,"caisseta",upd); setPanier([]); };
       const del = async(id)=>{ const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"caisseta",u); setConfirmId(null); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
-      const softs=carte.filter(c=>c.type==="Soft"), alcools=carte.filter(c=>c.type==="Alcool"), nourr=carte.filter(c=>c.type==="Nourriture");
+      const softs=carte.filter(c=>c.type==="Soft"), alcools=carte.filter(c=>c.type==="Alcool"), nourr=carte.filter(c=>c.type==="Snacking");
       return (
         <div className="space-y-6">
           {confirmId&&<ConfirmDialog msg="Confirmez-vous vouloir supprimer cette ligne ?" onOui={()=>del(confirmId)} onNon={()=>setConfirmId(null)}/>}
@@ -685,7 +759,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
             <h3 className="font-semibold text-gray-800 mb-4">🍺 Nouvelle commande TA</h3>
             <div className="mb-4"><label className="text-xs text-gray-500 block mb-1">Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-48 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"/></div>
             <div className="mb-4 space-y-2">
-              {[["Softs","teal",softs],["Alcools","amber",alcools],["Nourriture","rose",nourr]].map(([lbl,col,items])=>(
+              {[["Softs","teal",softs],["Alcools","amber",alcools],["Snacking","rose",nourr]].map(([lbl,col,items])=>(
                 <div key={lbl}><p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">{lbl}</p>
                   <div className="flex flex-wrap gap-2">{items.map(c=><button key={c.id} onClick={()=>add(c.label)} className={`bg-${col}-50 hover:bg-${col}-100 border border-${col}-200 text-${col}-800 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors`}>{c.label} <span className="opacity-60">{c.prix}€</span></button>)}</div>
                 </div>
@@ -911,7 +985,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
               })}
               {MODES.every(m=>sum(fTA.filter(r=>r.mode===m))+sum(fTCAM.filter(r=>r.mode===m),"montant")+sum(fD.filter(r=>r.mode===m),"montant")+fADH.reduce((s,r)=>s+(parseFloat(r[`indiv_${m}`])||0)+(parseFloat(r[`struc_${m}`])||0),0)+sum(fRC.filter(r=>r.mode===m),"prix_total")===0)&&<p className="text-sm text-gray-400 text-center py-4">Aucune donnée</p>}
             </div>
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4"><h4 className="text-sm font-semibold text-gray-700 mb-3">TA — Répartition par type</h4>{["Soft","Alcool","Nourriture"].map(t=>{const v=sum(fTA.filter(r=>r.typo===t));if(v===0)return null;return<div key={t} className="flex justify-between items-center py-1.5 border-b border-gray-50 last:border-0"><span className="text-sm text-gray-600">{t}</span><span className="font-semibold text-emerald-600">{v.toFixed(2)} €</span></div>;})} {["Soft","Alcool","Nourriture"].every(t=>sum(fTA.filter(r=>r.typo===t))===0)&&<p className="text-sm text-gray-400 text-center py-4">Aucune donnée</p>}</div>
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4"><h4 className="text-sm font-semibold text-gray-700 mb-3">TA — Répartition par type</h4>{["Soft","Alcool","Snacking"].map(t=>{const v=sum(fTA.filter(r=>r.typo===t));if(v===0)return null;return<div key={t} className="flex justify-between items-center py-1.5 border-b border-gray-50 last:border-0"><span className="text-sm text-gray-600">{t}</span><span className="font-semibold text-emerald-600">{v.toFixed(2)} €</span></div>;})} {["Soft","Alcool","Snacking"].every(t=>sum(fTA.filter(r=>r.typo===t))===0)&&<p className="text-sm text-gray-400 text-center py-4">Aucune donnée</p>}</div>
           </div>
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
             <h4 className="text-sm font-semibold text-gray-700 mb-3">Récap. hebdomadaire</h4>
@@ -976,17 +1050,17 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     };
 
     /* ── SECTION CARTE ── */
-    const TYPES_PRODUIT = ["Soft","Alcool","Nourriture"];
+    const TYPES_PRODUIT = ["Soft","Alcool","Snacking","Resto Coll."];
     const SectionCarte = ({ cafe, carte, setCarte }) => {
       const [f,setF]=useState({label:"",prix:"",type:"Soft"}); const [editId,setEditId]=useState(null); const [ef,setEf]=useState({});
       const save=async(upd)=>{ setCarte(upd); await saveData(cafe,"carte",upd); };
-      const add=async()=>{ if(!f.label||!f.prix)return; await save([...carte,{id:`c_${Date.now()}`,label:f.label,prix:parseFloat(f.prix),type:f.type}]); setF({label:"",prix:"",type:"Soft"}); };
-      const saveEdit=async(id)=>{ await save(carte.map(c=>c.id===id?{...c,label:ef.label,prix:parseFloat(ef.prix),type:ef.type}:c)); setEditId(null); };
+      const add=async()=>{ if(!f.label||!f.prix)return; const prod={id:`c_${Date.now()}`,label:f.label,prix:parseFloat(f.prix),type:f.type}; if(f.type==="Resto Coll.") prod.rcType=f.rcType||"Snacking"; await save([...carte,prod]); setF({label:"",prix:"",type:"Soft",rcType:"Snacking"}); };
+      const saveEdit=async(id)=>{ const upd={...carte.find(c=>c.id===id)||{},label:ef.label,prix:parseFloat(ef.prix),type:ef.type}; if(ef.type==="Resto Coll.") upd.rcType=ef.rcType||"Snacking"; else delete upd.rcType; await save(carte.map(c=>c.id===id?upd:c)); setEditId(null); };
       const del=async(id)=>await save(carte.filter(c=>c.id!==id));
       const grouped=TYPES_PRODUIT.map(type=>({type,items:carte.filter(c=>c.type===type)}));
-      const tBg={Soft:"bg-teal-50 border-teal-200",Alcool:"bg-amber-50 border-amber-200",Nourriture:"bg-rose-50 border-rose-200"};
-      const tHd={Soft:"bg-teal-100 text-teal-800",Alcool:"bg-amber-100 text-amber-800",Nourriture:"bg-rose-100 text-rose-800"};
-      const tRing={Soft:"focus:ring-teal-300 border-teal-200",Alcool:"focus:ring-amber-300 border-amber-200",Nourriture:"focus:ring-rose-300 border-rose-200"};
+      const tBg={Soft:"bg-teal-50 border-teal-200",Alcool:"bg-amber-50 border-amber-200",Snacking:"bg-rose-50 border-rose-200","Resto Coll.":"bg-orange-50 border-orange-200"};
+      const tHd={Soft:"bg-teal-100 text-teal-800",Alcool:"bg-amber-100 text-amber-800",Snacking:"bg-rose-100 text-rose-800","Resto Coll.":"bg-orange-100 text-orange-800"};
+      const tRing={Soft:"focus:ring-teal-300 border-teal-200",Alcool:"focus:ring-amber-300 border-amber-200",Snacking:"focus:ring-rose-300 border-rose-200","Resto Coll.":"focus:ring-orange-300 border-orange-200"};
       return (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
@@ -995,12 +1069,13 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
               <div><label className="text-xs text-gray-500 block mb-1">Nom</label><input type="text" placeholder="Ex: Kombucha…" value={f.label} onChange={e=>setF(x=>({...x,label:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 w-52"/></div>
               <div><label className="text-xs text-gray-500 block mb-1">Prix (€)</label><input type="number" step="0.5" min="0" value={f.prix} onChange={e=>setF(x=>({...x,prix:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 w-24"/></div>
               <div><label className="text-xs text-gray-500 block mb-1">Catégorie</label><select value={f.type} onChange={e=>setF(x=>({...x,type:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{TYPES_PRODUIT.map(t=><option key={t}>{t}</option>)}</select></div>
+              {f.type==="Resto Coll."&&<div><label className="text-xs text-gray-500 block mb-1">Type TVA</label><select value={f.rcType||"Snacking"} onChange={e=>setF(x=>({...x,rcType:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"><option value="Snacking">Snacking (10%)</option><option value="Soft">Soft (20%)</option><option value="Alcool">Alcool (20%)</option></select></div>}
               <button onClick={add} className="bg-gray-800 hover:bg-gray-900 text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">+ Ajouter</button>
             </div>
           </div>
           {grouped.map(({type,items})=>(
             <div key={type} className={`rounded-2xl border overflow-hidden shadow-sm ${tBg[type]}`}>
-              <div className={`px-4 py-2.5 flex items-center justify-between ${tHd[type]}`}><span className="font-semibold text-sm">{type==="Soft"?"🥤":type==="Alcool"?"🍺":"🍽️"} {type}s</span><span className="text-xs opacity-70">{items.length} produit{items.length>1?"s":""}</span></div>
+              <div className={`px-4 py-2.5 flex items-center justify-between ${tHd[type]}`}><span className="font-semibold text-sm">{type==="Soft"?"🥤":type==="Alcool"?"🍺":type==="Snacking"?"🍽️":"🍴"} {type==="Resto Coll."?"Restauration Collective":type+"s"}</span><span className="text-xs opacity-70">{items.length} produit{items.length>1?"s":""}</span></div>
               {items.length===0&&<p className="text-sm text-gray-400 text-center py-6">Aucun produit</p>}
               {items.map(item=>(
                 <div key={item.id} className="flex items-center gap-3 px-4 py-2.5 border-t border-white/60 bg-white/50">
@@ -1008,10 +1083,12 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                     <><input value={ef.label} onChange={e=>setEf(x=>({...x,label:e.target.value}))} className={`border rounded-lg px-2 py-1 text-sm flex-1 focus:outline-none focus:ring-2 ${tRing[type]}`}/>
                     <input type="number" step="0.5" value={ef.prix} onChange={e=>setEf(x=>({...x,prix:e.target.value}))} className={`border rounded-lg px-2 py-1 text-sm w-20 focus:outline-none focus:ring-2 ${tRing[type]}`}/>
                     <select value={ef.type} onChange={e=>setEf(x=>({...x,type:e.target.value}))} className={`border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 ${tRing[type]}`}>{TYPES_PRODUIT.map(t=><option key={t}>{t}</option>)}</select>
+                    {ef.type==="Resto Coll."&&<select value={ef.rcType||"Snacking"} onChange={e=>setEf(x=>({...x,rcType:e.target.value}))} className="border border-orange-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"><option value="Snacking">10% Snacking</option><option value="Soft">20% Soft</option><option value="Alcool">20% Alcool</option></select>}
                     <button onClick={()=>saveEdit(item.id)} className="text-emerald-600 hover:text-emerald-700 text-xs font-semibold px-2">✓ Sauver</button>
                     <button onClick={()=>setEditId(null)} className="text-gray-400 hover:text-gray-600 text-xs px-2">Annuler</button></>
                   ):(
                     <><span className="flex-1 text-sm font-medium text-gray-800">{item.label}</span><span className="text-sm font-bold text-gray-700 w-14 text-right">{item.prix.toFixed(2)} €</span>
+                    {item.type==="Resto Coll."&&<span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">{TVA_RATES[item.rcType||"Snacking"]*100|0}% TVA</span>}
                     <button onClick={()=>{setEditId(item.id);setEf({label:item.label,prix:item.prix,type:item.type});}} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1 rounded-lg hover:bg-white transition-colors">✏️ Éditer</button>
                     <button onClick={()=>del(item.id)} className="text-xs text-rose-400 hover:text-rose-600 px-2 py-1 rounded-lg hover:bg-white transition-colors">✕</button></>
                   )}
@@ -1025,20 +1102,13 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     };
 
     /* ── DASHBOARD GLOBAL ── */
-    const DashboardGlobal = ({ cafes, onCafeCreated, isAdmin }) => {
-      const [allCafesData,setAllCafesData]=useState({}); const [loading,setLoading]=useState(true);
+    const DashboardGlobal = ({ cafes, onCafeCreated, isAdmin, initialSubTab="dashboard", onSubTabChange=()=>{}, allCafesData={}, allCafesLoading=false, onForceRefresh=()=>{} }) => {
       const [ft,setFt]=useState("week"); const [sw,setSw]=useState(getCurrentWeekLabel); const [sm,setSm]=useState(new Date().getMonth()+1);
-      const [subTab,setSubTab]=useState("dashboard");
+      const [subTab,setSubTab]=useState(initialSubTab);
+      useEffect(()=>{ if(initialSubTab!==subTab) setSubTab(initialSubTab); },[initialSubTab]);
 
-      const cafesKeyRef = useRef(null);
-      const [refreshTick, setRefreshTick] = useState(0);
-      const forceRefresh = () => { _dataCache.clear(); setRefreshTick(t=>t+1); };
-      useEffect(()=>{
-        const key = cafes.join(",") + ":" + refreshTick;
-        if (cafesKeyRef.current === key && Object.keys(allCafesData).length > 0) { setLoading(false); return; }
-        cafesKeyRef.current = key;
-        (async()=>{ setLoading(true); const r={}; await Promise.all(cafes.map(async c=>{ const [ct,tc,dn,ac,pv,adh,rc]=await Promise.all([loadData(c,"caisseta"),loadData(c,"tcam"),loadData(c,"dons"),loadData(c,"achats"),loadData(c,"privatisation"),loadData(c,"adhesion"),loadData(c,"restocollective")]); r[c]={caisseta:ct,tcam:tc,dons:dn,achats:ac,privatisation:pv,adhesion:adh,restocollective:rc}; })); setAllCafesData(r); setLoading(false); })();
-      },[cafes, refreshTick]);
+      const loading = allCafesLoading;
+      const forceRefresh = onForceRefresh;
 
       const fil=useCallback((arr)=>{ if(ft==="week")return arr.filter(r=>r.semaine===sw); if(ft==="month")return arr.filter(r=>r.mois===sm); return arr; },[ft,sw,sm]);
       const sum=(arr,k="prix_total")=>arr.reduce((s,r)=>s+(parseFloat(r[k])||0),0);
@@ -1055,8 +1125,8 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       return (
         <div className="space-y-6">
           {isAdmin&&<div className="flex gap-2">
-            <button onClick={()=>setSubTab("dashboard")} style={subTab==="dashboard"?{backgroundColor:ADMIN_COLOR,color:"white"}:{}} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${subTab==="dashboard"?"":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>📊 Dashboard global</button>
-            <button onClick={()=>setSubTab("admin")} style={subTab==="admin"?{backgroundColor:ADMIN_COLOR,color:"white"}:{}} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${subTab==="admin"?"":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>⚙️ Administration</button>
+            <button onClick={()=>{ setSubTab("dashboard"); onSubTabChange("dashboard"); }} style={subTab==="dashboard"?{backgroundColor:ADMIN_COLOR,color:"white"}:{}} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${subTab==="dashboard"?"":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>📊 Dashboard global</button>
+            <button onClick={()=>{ setSubTab("admin"); onSubTabChange("admin"); }} style={subTab==="admin"?{backgroundColor:ADMIN_COLOR,color:"white"}:{}} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${subTab==="admin"?"":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>⚙️ Administration</button>
           </div>}
           {subTab==="admin"?<AdminPanel cafes={cafes} onCafeCreated={onCafeCreated}/>:<>
             {/* filtres */}
@@ -1067,7 +1137,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                 {ft==="month"&&<select value={sm} onChange={e=>setSm(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>}
               </div>
               <div className="flex gap-2">
-                <button onClick={forceRefresh} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">🔄 Actualiser</button>
+                <button onClick={onForceRefresh} disabled={allCafesLoading} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">{allCafesLoading?"⏳ Chargement…":"🔄 Actualiser"}</button>
                 <button onClick={handleExport} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Exporter CSV (tous cafés)</button>
               </div>
             </div>
@@ -1127,7 +1197,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                 })}
                 {[...MODES,"Prélèvement"].every(m=>{ const vTA=stats.reduce((s,c)=>s+sum(c.fTA.filter(r=>r.mode===m)),0); const vTC=stats.reduce((s,c)=>s+sum(c.fTC.filter(r=>r.mode===m),"montant"),0); const vD=stats.reduce((s,c)=>s+sum(c.fD.filter(r=>r.mode===m),"montant"),0); const vADH=stats.reduce((s,c)=>s+c.fADH.reduce((a,r)=>a+(parseFloat(r[`indiv_${m}`])||0)+(parseFloat(r[`struc_${m}`])||0),0),0); return vTA+vTC+vD+vADH===0; })&&<p className="text-sm text-gray-400 text-center py-4">Aucune donnée</p>}
               </div>
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4"><h4 className="text-sm font-semibold text-gray-700 mb-3">TA global — Répartition par type</h4>{["Soft","Alcool","Nourriture"].map(t=>{const v=stats.reduce((s,c)=>s+sum(c.fTA.filter(r=>r.typo===t)),0);if(v===0)return null;return<div key={t} className="flex justify-between items-center py-1.5 border-b border-gray-50 last:border-0"><span className="text-sm text-gray-600">{t}</span><span className="font-semibold text-emerald-600">{v.toFixed(2)} €</span></div>;})} {["Soft","Alcool","Nourriture"].every(t=>stats.reduce((s,c)=>s+sum(c.fTA.filter(r=>r.typo===t)),0)===0)&&<p className="text-sm text-gray-400 text-center py-4">Aucune donnée</p>}</div>
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4"><h4 className="text-sm font-semibold text-gray-700 mb-3">TA global — Répartition par type</h4>{["Soft","Alcool","Snacking"].map(t=>{const v=stats.reduce((s,c)=>s+sum(c.fTA.filter(r=>r.typo===t)),0);if(v===0)return null;return<div key={t} className="flex justify-between items-center py-1.5 border-b border-gray-50 last:border-0"><span className="text-sm text-gray-600">{t}</span><span className="font-semibold text-emerald-600">{v.toFixed(2)} €</span></div>;})} {["Soft","Alcool","Snacking"].every(t=>stats.reduce((s,c)=>s+sum(c.fTA.filter(r=>r.typo===t)),0)===0)&&<p className="text-sm text-gray-400 text-center py-4">Aucune donnée</p>}</div>
             </div>
             {/* Récap hebdo */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4"><h4 className="text-sm font-semibold text-gray-700 mb-3">Récap. hebdomadaire — tous cafés</h4>
@@ -1455,7 +1525,9 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       useEffect(()=>{ loadData(cafe,"restocollective").then(d=>{ setRows(d); setLoading(false); }); },[cafe,refreshTick]);
 
       const calcTVA = (item) => {
-        const rate = TVA_RATES[item.type] || 0;
+        // Pour les produits Resto Coll., utiliser rcType pour la TVA
+        const tvaKey = item.rcType || (item.type==="Snacking"?"Snacking":item.type);
+        const rate = TVA_RATES[tvaKey] || 0.20;
         const ttc  = item.prix;
         const ht   = parseFloat((ttc / (1+rate)).toFixed(4));
         const tva  = parseFloat((ttc - ht).toFixed(4));
@@ -1507,7 +1579,8 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
 
       const softs  = carte.filter(c=>c.type==="Soft");
       const alcools= carte.filter(c=>c.type==="Alcool");
-      const nourr  = carte.filter(c=>c.type==="Nourriture");
+      const nourr  = carte.filter(c=>c.type==="Snacking");
+      const rcProd = carte.filter(c=>c.type==="Resto Coll.");
 
       return (
         <div className="space-y-6">
@@ -1518,7 +1591,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
             <span className="text-orange-500 text-lg mt-0.5">ℹ️</span>
             <div className="text-xs text-orange-800">
               <strong>TVA appliquée automatiquement</strong> — Prix saisis TTC :<br/>
-              🍽️ Nourriture : TVA 10% | 🥤 Softs : TVA 20% | 🍺 Alcools : TVA 20%
+              🍽️ Snacking : TVA 10% | 🍴 Restauration Coll. : TVA selon type | 🥤 Softs : TVA 20% | 🍺 Alcools : TVA 20%
             </div>
           </div>
 
@@ -1528,7 +1601,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
             <div className="mb-4"><label className="text-xs text-gray-500 block mb-1">Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-48 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"/></div>
 
             <div className="mb-4 space-y-2">
-              {[["🍽️ Nourriture (TVA 10%)","rose",nourr],["🥤 Softs (TVA 20%)","teal",softs],["🍺 Alcools (TVA 20%)","amber",alcools]].map(([lbl,col,items])=>(
+              {[["🍽️ Snacking (TVA 10%)","rose",nourr],["🥤 Softs (TVA 20%)","teal",softs],["🍺 Alcools (TVA 20%)","amber",alcools],["🍴 Restauration Collective","orange",rcProd]].map(([lbl,col,items])=>(
                 <div key={lbl}>
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">{lbl}</p>
                   <div className="flex flex-wrap gap-2">
@@ -1536,7 +1609,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   </div>
                 </div>
               ))}
-              <div className="mt-2"><select value={selProd} onChange={e=>add(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-orange-300"><option value="">+ Ajouter via la liste complète…</option>{carte.map(c=><option key={c.id} value={c.label}>{c.label} ({c.prix}€ TTC — TVA {(TVA_RATES[c.type]*100)}%)</option>)}</select></div>
+              <div className="mt-2"><select value={selProd} onChange={e=>add(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-orange-300"><option value="">+ Ajouter via la liste complète…</option>{carte.map(c=><option key={c.id} value={c.label}>{c.label} ({c.prix}€ TTC — TVA {(TVA_RATES[c.rcType||c.type]||0.20)*100}%)</option>)}</select></div>
             </div>
 
             {/* Panier */}
@@ -1631,6 +1704,10 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const [globalView,setGlobalView] = useState(false);
       const [rcEnabled,setRcEnabled] = useState(()=>loadRCEnabled());
       const [saveError,setSaveError] = useState(null);
+      const [subTabAdmin,setSubTabAdmin] = useState("dashboard"); // "dashboard" ou "admin"
+      const [allCafesData,setAllCafesData] = useState({});
+      const [allCafesLoaded,setAllCafesLoaded] = useState(false);
+      const [allCafesLoading,setAllCafesLoading] = useState(false);
 
       // Refresh RC state when café changes or admin toggles
       useEffect(()=>{ setRcEnabled(loadRCEnabled()); },[]);
@@ -1640,6 +1717,37 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
         window.addEventListener("daddy_save_error",h);
         return()=>window.removeEventListener("daddy_save_error",h);
       },[]);
+
+      // Chargement unique des données globales — guard via useRef pour éviter doubles appels async
+      const _loadingRef = useRef(false);
+      const loadAllCafes = async (force=false) => {
+        if (_loadingRef.current) return;            // déjà en cours (guard synchrone)
+        if (allCafesLoaded && !force) return;       // déjà chargé
+        _loadingRef.current = true;
+        setAllCafesLoading(true);
+        if (force) { _dataCache.clear(); setAllCafesLoaded(false); }
+        try {
+          const r={};
+          await Promise.all(cafes.map(async c=>{
+            const [ct,tc,dn,ac,pv,adh,rc]=await Promise.all([
+              loadData(c,"caisseta"),loadData(c,"tcam"),loadData(c,"dons"),
+              loadData(c,"achats"),loadData(c,"privatisation"),loadData(c,"adhesion"),
+              loadData(c,"restocollective")
+            ]);
+            r[c]={caisseta:ct,tcam:tc,dons:dn,achats:ac,privatisation:pv,adhesion:adh,restocollective:rc};
+          }));
+          setAllCafesData(r);
+          setAllCafesLoaded(true);
+        } finally {
+          setAllCafesLoading(false);
+          _loadingRef.current = false;
+        }
+      };
+
+      // Charger au premier passage en vue globale (ou retour en vue globale si pas encore chargé)
+      useEffect(()=>{
+        if(globalView && !allCafesLoaded && !_loadingRef.current) loadAllCafes();
+      },[globalView, allCafesLoaded]);
 
       const isAdmin = session?.role === "admin";
       const activeCafe = isAdmin ? (selCafe || cafes[0]) : session?.cafe;
@@ -1663,7 +1771,11 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
         loadData(activeCafe,"carte").then(saved=>{ setCarte(saved&&saved.length>0?saved:DEFAULT_CARTE); setCarteLoaded(true); });
       },[activeCafe, cafeRefreshTick]);
 
-      if(!session) return <LoginScreen onLogin={s=>{setSession(s);setSelCafe(s.role==="admin"?cafes[0]:s.cafe);}}/>;
+      if(!session) return <LoginScreen onLogin={s=>{
+        setSession(s);
+        if(s.role==="admin") { setGlobalView(true); setSubTabAdmin("admin"); }
+        else setSelCafe(s.cafe);
+      }}/>;
 
       const cafeColor = getCafeColor(activeCafe||cafes[0], cafes);
 
@@ -1687,7 +1799,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                 </div>
                 <div className="flex items-center gap-2">
                   {/* Vue globale */}
-                  <button onClick={()=>{setGlobalView(v=>!v);setMenuOpen(false);}} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-colors border ${globalView?"bg-white/30 border-white":"bg-white/15 hover:bg-white/25 border-white/30"}`}>
+                  <button onClick={()=>{setGlobalView(v=>{if(v)setSubTabAdmin("dashboard");return !v;});setMenuOpen(false);}} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-colors border ${globalView?"bg-white/30 border-white":"bg-white/15 hover:bg-white/25 border-white/30"}`}>
                     🌐 <span className="hidden sm:inline">{globalView?"Vue café":"Vue globale"}</span>
                   </button>
                   {/* Sélecteur café (admin seulement, hors vue globale) */}
@@ -1737,7 +1849,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
             {globalView?(
               <>
                 <div className="mb-4 flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full" style={{backgroundColor:ADMIN_COLOR}}></span><h2 className="text-sm font-semibold text-gray-600">Vue globale — Tous les cafés</h2></div>
-                <DashboardGlobal cafes={cafes} onCafeCreated={setCafes} isAdmin={isAdmin}/>
+                <DashboardGlobal cafes={cafes} onCafeCreated={setCafes} isAdmin={isAdmin} initialSubTab={subTabAdmin} onSubTabChange={setSubTabAdmin} allCafesData={allCafesData} allCafesLoading={allCafesLoading} onForceRefresh={()=>loadAllCafes(true)}/>
               </>
             ):(
               <>
