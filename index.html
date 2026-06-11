@@ -177,10 +177,11 @@
       "mode","facture_teams","no_facture","commentaire","id","recorded_at"
     ];
     const sortedHeaders = (rows) => {
+      // Toujours inclure toutes les colonnes de CSV_COL_ORDER (vides si absentes)
+      // + les colonnes supplémentaires présentes dans les données
       const allKeys = [...new Set(rows.flatMap(r=>Object.keys(r)))];
-      const ordered = CSV_COL_ORDER.filter(k=>allKeys.includes(k));
       const rest = allKeys.filter(k=>!CSV_COL_ORDER.includes(k));
-      return [...ordered, ...rest];
+      return [...CSV_COL_ORDER, ...rest];
     };
     const buildCSVString = (rows) => {
       if (!rows.length) return "";
@@ -699,7 +700,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 08:44</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 08:53</p>
             </div>
           </div>
         </div>
