@@ -174,7 +174,7 @@
       "produit","evenement","client","fournisseur","typo","destination",
       "qte","Prix de vente unitaire","HT_PU","tva_taux","tva_unitaire","tva_total","ht_total","montant TTC payé",
       "montant_devis","devis_accepte","date_evenement",
-      "mode","facture_teams","no_facture","commentaire","id"
+      "mode","facture_teams","no_facture","commentaire","id","recorded_at"
     ];
     const sortedHeaders = (rows) => {
       const allKeys = [...new Set(rows.flatMap(r=>Object.keys(r)))];
@@ -195,7 +195,7 @@
       const out = {};
       // Colonnes directes sans renommage
       ["date","semaine","mois","produit","evenement","fournisseur","typo","destination",
-       "qte","mode","facture_teams","no_facture","commentaire","id"].forEach(k => {
+       "qte","mode","facture_teams","no_facture","commentaire","id","recorded_at"].forEach(k => {
         if (r[k] !== undefined) out[k] = r[k];
       });
 
@@ -699,7 +699,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 08:37</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 08:44</p>
             </div>
           </div>
         </div>
@@ -1147,7 +1147,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const add = (label) => { if(!label)return; const item=carte.find(c=>c.label===label); if(!item)return; setPanier(p=>{const ei=p.findIndex(l=>l.produit===label); if(ei>=0){const c=[...p];c[ei]={...c[ei],qte:c[ei].qte+1};return c;} return [...p,{produit:label,prix_unitaire:item.prix,qte:1,typo:item.type,tva_taux:item.tva_taux||"0",prix_ht:item.prix_ht||calcHT(item.prix,item.tva_taux||"0")}];}); setSelProd(""); };
       const upd = (i,d)=>setPanier(p=>{const c=[...p];c[i]={...c[i],qte:Math.max(1,c[i].qte+d)};return c;});
       const rem = (i)=>setPanier(p=>p.filter((_,j)=>j!==i));
-      const valider = async()=>{ if(!panier.length||!date)return; const now=Date.now(); const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo,...(l.tva_taux&&l.tva_taux!=="0"?{tva_taux:l.tva_taux,prix_ht:l.prix_ht}:{})})); const upd=[...nr,...rows]; setRows(upd); setPanier([]); setMontantDonne(""); await saveData(cafe,"caisseta",upd); };
+      const valider = async()=>{ if(!panier.length||!date)return; const now=Date.now(); const recAt=new Date().toISOString().slice(0,16).replace("T"," "); const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo,...(l.tva_taux&&l.tva_taux!=="0"?{tva_taux:l.tva_taux,prix_ht:l.prix_ht}:{}),recorded_at:recAt})); const upd=[...nr,...rows]; setRows(upd); setPanier([]); setMontantDonne(""); await saveData(cafe,"caisseta",upd); };
       const del = async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"caisseta",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       const softs=carte.filter(c=>c.type==="Soft"), alcools=carte.filter(c=>c.type==="Alcool"), nourr=carte.filter(c=>c.type==="Snacking");
@@ -1205,7 +1205,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [montantDonneTCAM,setMontantDonneTCAM]=useState("");
       useEffect(()=>{loadData(cafe,"tcam").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const puV=parseFloat(f.pu)||0, qteV=parseFloat(f.qte)||0, hasC=puV>0&&qteV>0, tot=hasC?parseFloat((puV*qteV).toFixed(2)):(parseFloat(f.montant)||0);
-      const submit=async()=>{ if(!f.evenement||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),evenement:f.evenement,pu:puV,qte:qteV||null,montant:tot,mode:f.mode,commentaire:f.commentaire}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,evenement:"",pu:"",qte:"",montant:"",commentaire:""})); setMontantDonneTCAM(""); await saveData(cafe,"tcam",upd); };
+      const submit=async()=>{ if(!f.evenement||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),evenement:f.evenement,pu:puV,qte:qteV||null,montant:tot,mode:f.mode,commentaire:f.commentaire,recorded_at:new Date().toISOString().slice(0,16).replace("T"," ")}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,evenement:"",pu:"",qte:"",montant:"",commentaire:""})); setMontantDonneTCAM(""); await saveData(cafe,"tcam",upd); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"tcam",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
@@ -1244,7 +1244,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [confirmId,setConfirmId]=useState(null);
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),produit:"Don",montant:"",mode:"CB",recu_fiscal:"non",commentaire:""});
       useEffect(()=>{loadData(cafe,"dons").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
-      const submit=async()=>{ if(!f.montant||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),produit:f.produit,montant:parseFloat(f.montant),mode:f.mode,recu_fiscal:f.recu_fiscal,commentaire:f.commentaire}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,montant:"",commentaire:""})); await saveData(cafe,"dons",upd); };
+      const submit=async()=>{ if(!f.montant||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),produit:f.produit,montant:parseFloat(f.montant),mode:f.mode,recu_fiscal:f.recu_fiscal,commentaire:f.commentaire,recorded_at:new Date().toISOString().slice(0,16).replace("T"," ")}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,montant:"",commentaire:""})); await saveData(cafe,"dons",upd); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"dons",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
@@ -1284,7 +1284,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       },[cafe]);
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),fournisseur:"",destination:loadDestinations(cafe)[0]||"",montant:"",mode:"CB",no_facture:"",facture_teams:"non"});
       useEffect(()=>{loadData(cafe,"achats").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
-      const submit=async()=>{ if(!f.fournisseur||!f.montant)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),fournisseur:f.fournisseur,destination:f.destination,montant:parseFloat(f.montant),mode:f.mode,no_facture:f.no_facture,facture_teams:f.facture_teams}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,fournisseur:"",montant:"",no_facture:""})); await saveData(cafe,"achats",upd); };
+      const submit=async()=>{ if(!f.fournisseur||!f.montant)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),fournisseur:f.fournisseur,destination:f.destination,montant:parseFloat(f.montant),mode:f.mode,no_facture:f.no_facture,facture_teams:f.facture_teams,recorded_at:new Date().toISOString().slice(0,16).replace("T"," ")}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,fournisseur:"",montant:"",no_facture:""})); await saveData(cafe,"achats",upd); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"achats",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
@@ -1319,7 +1319,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [confirmId,setConfirmId]=useState(null);
       const [f,setF]=useState({date_evenement:"",client:"",montant_devis:"",devis_accepte:"OUI",montant_facture:"",date_reglement:"",mode:"Chèque"});
       useEffect(()=>{loadData(cafe,"privatisation").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
-      const submit=async()=>{ if(!f.client)return; const nr={id:Date.now(),...f,semaine:getWeekForDate(f.date_evenement),mois:getMonthForDate(f.date_evenement),montant_devis:parseFloat(f.montant_devis)||0,montant_facture:parseFloat(f.montant_facture)||0}; const upd=[nr,...rows]; setRows(upd); await saveData(cafe,"privatisation",upd); setF({date_evenement:"",client:"",montant_devis:"",devis_accepte:"OUI",montant_facture:"",date_reglement:"",mode:"Chèque"}); };
+      const submit=async()=>{ if(!f.client)return; const nr={id:Date.now(),...f,semaine:getWeekForDate(f.date_evenement),mois:getMonthForDate(f.date_evenement),montant_devis:parseFloat(f.montant_devis)||0,montant_facture:parseFloat(f.montant_facture)||0,recorded_at:new Date().toISOString().slice(0,16).replace("T"," ")}; const upd=[nr,...rows]; setRows(upd); await saveData(cafe,"privatisation",upd); setF({date_evenement:"",client:"",montant_devis:"",devis_accepte:"OUI",montant_facture:"",date_reglement:"",mode:"Chèque"}); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"privatisation",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
