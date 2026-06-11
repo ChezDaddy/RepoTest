@@ -699,7 +699,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 07:54</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 08:37</p>
             </div>
           </div>
         </div>
@@ -1141,12 +1141,13 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [rows,setRows]=useState([]); const [date,setDate]=useState(new Date().toISOString().slice(0,10));
       const [mode,setMode]=useState("CB"); const [panier,setPanier]=useState([]); const [selProd,setSelProd]=useState(""); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
+      const [montantDonne,setMontantDonne]=useState("");
       useEffect(()=>{loadData(cafe,"caisseta").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const total = panier.reduce((s,l)=>s+l.prix_unitaire*l.qte,0);
       const add = (label) => { if(!label)return; const item=carte.find(c=>c.label===label); if(!item)return; setPanier(p=>{const ei=p.findIndex(l=>l.produit===label); if(ei>=0){const c=[...p];c[ei]={...c[ei],qte:c[ei].qte+1};return c;} return [...p,{produit:label,prix_unitaire:item.prix,qte:1,typo:item.type,tva_taux:item.tva_taux||"0",prix_ht:item.prix_ht||calcHT(item.prix,item.tva_taux||"0")}];}); setSelProd(""); };
       const upd = (i,d)=>setPanier(p=>{const c=[...p];c[i]={...c[i],qte:Math.max(1,c[i].qte+d)};return c;});
       const rem = (i)=>setPanier(p=>p.filter((_,j)=>j!==i));
-      const valider = async()=>{ if(!panier.length||!date)return; const now=Date.now(); const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo,...(l.tva_taux&&l.tva_taux!=="0"?{tva_taux:l.tva_taux,prix_ht:l.prix_ht}:{})})); const upd=[...nr,...rows]; setRows(upd); setPanier([]); await saveData(cafe,"caisseta",upd); };
+      const valider = async()=>{ if(!panier.length||!date)return; const now=Date.now(); const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo,...(l.tva_taux&&l.tva_taux!=="0"?{tva_taux:l.tva_taux,prix_ht:l.prix_ht}:{})})); const upd=[...nr,...rows]; setRows(upd); setPanier([]); setMontantDonne(""); await saveData(cafe,"caisseta",upd); };
       const del = async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"caisseta",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       const softs=carte.filter(c=>c.type==="Soft"), alcools=carte.filter(c=>c.type==="Alcool"), nourr=carte.filter(c=>c.type==="Snacking");
@@ -1180,7 +1181,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <div className="flex items-center justify-between mt-2 gap-4">
               <div>{panier.length>0?<div className="bg-emerald-500 text-white rounded-xl px-5 py-3 text-center shadow-sm"><p className="text-xs opacity-80 uppercase tracking-wide">À encaisser</p><p className="text-3xl font-bold">{total.toFixed(2)} €</p><p className="text-xs opacity-80">{mode} · {getWeekForDate(date)}</p></div>:<span className="text-sm text-gray-400">Ajoutez des produits ci-dessus</span>}</div>
               <div className="flex flex-col items-stretch gap-2 min-w-48">
-                <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border-2 border-emerald-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-emerald-50">{MODES.map(m=><option key={m}>{m}</option>)}</select></div>
+                <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label><select value={mode} onChange={e=>{setMode(e.target.value);setMontantDonne("");}} className="w-full border-2 border-emerald-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-emerald-50">{MODES.map(m=><option key={m}>{m}</option>)}</select></div>
+                {mode==="Espèces"&&panier.length>0&&<div className="space-y-1.5">
+                  <div><label className="text-xs text-gray-500 block mb-1">💵 Montant donné (€)</label><input type="number" step="0.5" min="0" value={montantDonne} onChange={e=>setMontantDonne(e.target.value)} placeholder={total.toFixed(2)} className="w-full border-2 border-amber-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-300 bg-amber-50"/></div>
+                  {montantDonne&&parseFloat(montantDonne)>=total&&<div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-gray-500">Rendu de monnaie</p><p className="text-xl font-bold text-emerald-600">{(parseFloat(montantDonne)-total).toFixed(2)} €</p></div>}
+                  {montantDonne&&parseFloat(montantDonne)<total&&<div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-rose-500 font-medium">⚠️ Montant insuffisant ({(total-parseFloat(montantDonne)).toFixed(2)} € manquant)</p></div>}
+                </div>}
                 <button onClick={valider} disabled={!panier.length} className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors shadow-sm">✅ Valider & enregistrer</button>
                 {panier.length>0&&<button onClick={()=>setPanier([])} className="text-xs text-gray-400 hover:text-gray-600 text-center">Vider le panier</button>}
               </div>
