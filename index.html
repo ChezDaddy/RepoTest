@@ -699,7 +699,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 07:41</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 07:54</p>
             </div>
           </div>
         </div>
@@ -1196,9 +1196,10 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),evenement:"",pu:"",qte:"",montant:"",mode:"Espèces",commentaire:""});
+      const [montantDonneTCAM,setMontantDonneTCAM]=useState("");
       useEffect(()=>{loadData(cafe,"tcam").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const puV=parseFloat(f.pu)||0, qteV=parseFloat(f.qte)||0, hasC=puV>0&&qteV>0, tot=hasC?parseFloat((puV*qteV).toFixed(2)):(parseFloat(f.montant)||0);
-      const submit=async()=>{ if(!f.evenement||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),evenement:f.evenement,pu:puV,qte:qteV||null,montant:tot,mode:f.mode,commentaire:f.commentaire}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,evenement:"",pu:"",qte:"",montant:"",commentaire:""})); await saveData(cafe,"tcam",upd); };
+      const submit=async()=>{ if(!f.evenement||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),evenement:f.evenement,pu:puV,qte:qteV||null,montant:tot,mode:f.mode,commentaire:f.commentaire}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,evenement:"",pu:"",qte:"",montant:"",commentaire:""})); setMontantDonneTCAM(""); await saveData(cafe,"tcam",upd); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"tcam",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
@@ -1216,7 +1217,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <div className="flex items-center justify-between mt-4 gap-4">
               <div>{hasC?<div className="bg-amber-500 text-white rounded-xl px-5 py-3 shadow-sm"><p className="text-xs opacity-80 uppercase tracking-wide">À encaisser</p><p className="text-3xl font-bold">{tot.toFixed(2)} €</p><p className="text-xs opacity-80">{puV}€ × {qteV}</p></div>:<span className="text-sm text-gray-500">Total : <strong className="text-amber-600">{tot.toFixed(2)} €</strong></span>}</div>
               <div className="flex flex-col items-stretch gap-2 min-w-48">
-                <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label><select value={f.mode} onChange={e=>setF(x=>({...x,mode:e.target.value}))} className="w-full border-2 border-amber-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-400 bg-amber-50">{MODES.map(m=><option key={m}>{m}</option>)}</select></div>
+                <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label><select value={f.mode} onChange={e=>{setF(x=>({...x,mode:e.target.value}));setMontantDonneTCAM("");}} className="w-full border-2 border-amber-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-400 bg-amber-50">{MODES.map(m=><option key={m}>{m}</option>)}</select></div>
+                {f.mode==="Espèces"&&tot>0&&<div className="space-y-1.5">
+                  <div><label className="text-xs text-gray-500 block mb-1">💵 Montant donné (€)</label><input type="number" step="0.5" min="0" value={montantDonneTCAM} onChange={e=>setMontantDonneTCAM(e.target.value)} placeholder={tot.toFixed(2)} className="w-full border-2 border-amber-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-300 bg-amber-50"/></div>
+                  {montantDonneTCAM&&parseFloat(montantDonneTCAM)>=tot&&<div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-gray-500">Rendu de monnaie</p><p className="text-xl font-bold text-emerald-600">{(parseFloat(montantDonneTCAM)-tot).toFixed(2)} €</p></div>}
+                  {montantDonneTCAM&&parseFloat(montantDonneTCAM)<tot&&<div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-rose-500 font-medium">⚠️ Montant insuffisant ({(tot-parseFloat(montantDonneTCAM)).toFixed(2)} € manquant)</p></div>}
+                </div>}
                 <button onClick={submit} className="bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
               </div>
             </div>
@@ -1399,7 +1405,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               const curIdx = WEEKS_2026.findIndex(w=>w.label===getCurrentWeekLabel());
               const start = curIdx >= 0 ? curIdx : 0;
               const weeksDesc = WEEKS_2026.slice(Math.max(0, start-19), start+1).slice().reverse();
-              const rowsToShow = weeksDesc.map(w=>{ const wTA=sum(allData.caisseta.filter(r=>r.semaine===w.label)),wTC=sum(allData.tcam.filter(r=>r.semaine===w.label),"montant"),wD=sum(allData.dons.filter(r=>r.semaine===w.label),"montant"),wA=sum(allData.achats.filter(r=>r.semaine===w.label),"montant"),wADH=sum(allData.adhesion.filter(r=>r.semaine===w.label),"total"),wRC=sum(allData.restocollective.filter(r=>r.semaine===w.label),"prix_total"); return {w,wTA,wTC,wD,wA,wADH,wRC}; }).filter(({wTA,wTC,wD,wA,wADH,wRC})=>wTA+wTC+wD+wA+wADH+wRC>0);
+              const curLabel = getCurrentWeekLabel();
+              const rowsToShow = weeksDesc.map(w=>{ const wTA=sum(allData.caisseta.filter(r=>r.semaine===w.label)),wTC=sum(allData.tcam.filter(r=>r.semaine===w.label),"montant"),wD=sum(allData.dons.filter(r=>r.semaine===w.label),"montant"),wA=sum(allData.achats.filter(r=>r.semaine===w.label),"montant"),wADH=sum(allData.adhesion.filter(r=>r.semaine===w.label),"total"),wRC=sum(allData.restocollective.filter(r=>r.semaine===w.label),"prix_total"); return {w,wTA,wTC,wD,wA,wADH,wRC}; }).filter(({w,wTA,wTC,wD,wA,wADH,wRC})=>w.label===curLabel||wTA+wTC+wD+wA+wADH+wRC>0);
               return rowsToShow.map(({w,wTA,wTC,wD,wA,wADH,wRC})=><tr key={w.label} className="border-t border-gray-50 hover:bg-gray-50"><td className="px-3 py-2 font-medium text-gray-700">{w.label}</td><td className="px-3 py-2 text-emerald-600">{wTA.toFixed(2)}€</td><td className="px-3 py-2 text-amber-600">{wTC.toFixed(2)}€</td><td className="px-3 py-2 text-rose-600">{wD.toFixed(2)}€</td><td className="px-3 py-2 text-indigo-600">{wADH.toFixed(2)}€</td><td className="px-3 py-2 text-orange-600">{wRC.toFixed(2)}€</td><td className="px-3 py-2 text-sky-600">-{wA.toFixed(2)}€</td><td className="px-3 py-2 font-bold text-gray-800">{(wTA+wTC+wD+wADH+wRC).toFixed(2)}€</td></tr>);
             })()}</table></div>
           </div>
@@ -1576,7 +1583,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
       let weekly = [];
       try {
-        { const curIdx=WEEKS_2026.findIndex(w=>w.label===getCurrentWeekLabel()); const start=curIdx>=0?curIdx:0; const weeksDesc=WEEKS_2026.slice(Math.max(0,start-19),start+1).slice().reverse(); weekly=weeksDesc.map(w=>{ let ta=0,tc=0,dn=0,ac=0,adh=0; cafes.forEach(c=>{ const d=allCafesData[c]||{}; ta+=sum((d.caisseta||[]).filter(r=>r.semaine===w.label)); tc+=sum((d.tcam||[]).filter(r=>r.semaine===w.label),"montant"); dn+=sum((d.dons||[]).filter(r=>r.semaine===w.label),"montant"); ac+=sum((d.achats||[]).filter(r=>r.semaine===w.label),"montant"); adh+=sum((d.adhesion||[]).filter(r=>r.semaine===w.label),"total"); }); return{week:w.label,ta,tc,dn,ac,adh,total:ta+tc+dn+adh}; }).filter(r=>r.ta+r.tc+r.dn+r.ac+r.adh>0); }
+        { const curIdx=WEEKS_2026.findIndex(w=>w.label===getCurrentWeekLabel()); const start=curIdx>=0?curIdx:0; const weeksDesc=WEEKS_2026.slice(Math.max(0,start-19),start+1).slice().reverse(); const _curLabel=getCurrentWeekLabel(); weekly=weeksDesc.map(w=>{ let ta=0,tc=0,dn=0,ac=0,adh=0; cafes.forEach(c=>{ const d=allCafesData[c]||{}; ta+=sum((d.caisseta||[]).filter(r=>r.semaine===w.label)); tc+=sum((d.tcam||[]).filter(r=>r.semaine===w.label),"montant"); dn+=sum((d.dons||[]).filter(r=>r.semaine===w.label),"montant"); ac+=sum((d.achats||[]).filter(r=>r.semaine===w.label),"montant"); adh+=sum((d.adhesion||[]).filter(r=>r.semaine===w.label),"total"); }); return{week:w.label,ta,tc,dn,ac,adh,total:ta+tc+dn+adh}; }).filter(r=>r.week===_curLabel||r.ta+r.tc+r.dn+r.ac+r.adh>0); }
       } catch(wErr) { console.error("WEEKLY CRASH:", wErr.message); }
 
       const handleExport=()=>{ const p=ft==="week"?sw:ft==="month"?`M${sm}`:"all"; const rows=[]; cafes.forEach(c=>{ const d=allCafesData[c]||{}; const fn=r=>{ const d=r.date||r.date_evenement; if(!d)return false; if(ft==="week")return r.semaine===sw; if(ft==="month")return r.mois===sm; return true; }; ["caisseta","tcam","dons","achats","privatisation"].forEach(s=>(d[s]||[]).filter(fn).forEach(r=>rows.push({Café:c,Section:s.toUpperCase(),...normalizeRow(r,s)}))); explodeAdhesion((d.adhesion||[]).filter(fn),c).forEach(r=>rows.push({...r})); (d.restocollective||[]).filter(fn).forEach(r=>rows.push({Café:c,Section:"RESTOCOLLECTIVE",...normalizeRow(r,"restocollective")})); }); buildAndDownloadCSV(rows,`DaddyCafe_GLOBAL_${p}_${new Date().toISOString().slice(0,10)}.csv`); };
