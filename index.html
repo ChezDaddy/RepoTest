@@ -699,7 +699,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 07:17</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 07:41</p>
             </div>
           </div>
         </div>
@@ -1394,7 +1394,14 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
             <h4 className="text-sm font-semibold text-gray-700 mb-3">Récap. hebdomadaire</h4>
             <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="bg-gray-50">{["Semaine","TA","TCAM","Dons","Adhés.","RC","Achats","Total encaissé"].map(h=><th key={h} className="text-left px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold">{h}</th>)}</tr></thead>
-            <tbody>{WEEKS_2026.slice(0,20).map(w=>{ const wTA=sum(allData.caisseta.filter(r=>r.semaine===w.label)),wTC=sum(allData.tcam.filter(r=>r.semaine===w.label),"montant"),wD=sum(allData.dons.filter(r=>r.semaine===w.label),"montant"),wA=sum(allData.achats.filter(r=>r.semaine===w.label),"montant"),wADH=sum(allData.adhesion.filter(r=>r.semaine===w.label),"total"),wRC=sum(allData.restocollective.filter(r=>r.semaine===w.label),"prix_total"); if(wTA+wTC+wD+wA+wADH+wRC===0)return null; return<tr key={w.label} className="border-t border-gray-50 hover:bg-gray-50"><td className="px-3 py-2 font-medium text-gray-700">{w.label}</td><td className="px-3 py-2 text-emerald-600">{wTA.toFixed(2)}€</td><td className="px-3 py-2 text-amber-600">{wTC.toFixed(2)}€</td><td className="px-3 py-2 text-rose-600">{wD.toFixed(2)}€</td><td className="px-3 py-2 text-indigo-600">{wADH.toFixed(2)}€</td><td className="px-3 py-2 text-orange-600">{wRC.toFixed(2)}€</td><td className="px-3 py-2 text-sky-600">-{wA.toFixed(2)}€</td><td className="px-3 py-2 font-bold text-gray-800">{(wTA+wTC+wD+wADH+wRC).toFixed(2)}€</td></tr>; })}</tbody></table></div>
+            {(()=>{
+              // Semaines par ordre décroissant depuis la semaine courante
+              const curIdx = WEEKS_2026.findIndex(w=>w.label===getCurrentWeekLabel());
+              const start = curIdx >= 0 ? curIdx : 0;
+              const weeksDesc = WEEKS_2026.slice(Math.max(0, start-19), start+1).slice().reverse();
+              const rowsToShow = weeksDesc.map(w=>{ const wTA=sum(allData.caisseta.filter(r=>r.semaine===w.label)),wTC=sum(allData.tcam.filter(r=>r.semaine===w.label),"montant"),wD=sum(allData.dons.filter(r=>r.semaine===w.label),"montant"),wA=sum(allData.achats.filter(r=>r.semaine===w.label),"montant"),wADH=sum(allData.adhesion.filter(r=>r.semaine===w.label),"total"),wRC=sum(allData.restocollective.filter(r=>r.semaine===w.label),"prix_total"); return {w,wTA,wTC,wD,wA,wADH,wRC}; }).filter(({wTA,wTC,wD,wA,wADH,wRC})=>wTA+wTC+wD+wA+wADH+wRC>0);
+              return rowsToShow.map(({w,wTA,wTC,wD,wA,wADH,wRC})=><tr key={w.label} className="border-t border-gray-50 hover:bg-gray-50"><td className="px-3 py-2 font-medium text-gray-700">{w.label}</td><td className="px-3 py-2 text-emerald-600">{wTA.toFixed(2)}€</td><td className="px-3 py-2 text-amber-600">{wTC.toFixed(2)}€</td><td className="px-3 py-2 text-rose-600">{wD.toFixed(2)}€</td><td className="px-3 py-2 text-indigo-600">{wADH.toFixed(2)}€</td><td className="px-3 py-2 text-orange-600">{wRC.toFixed(2)}€</td><td className="px-3 py-2 text-sky-600">-{wA.toFixed(2)}€</td><td className="px-3 py-2 font-bold text-gray-800">{(wTA+wTC+wD+wADH+wRC).toFixed(2)}€</td></tr>);
+            })()}</table></div>
           </div>
           {/* ── PNL ANNUEL ── */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -1569,7 +1576,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
       let weekly = [];
       try {
-        weekly=WEEKS_2026.slice(0,20).map(w=>{ let ta=0,tc=0,dn=0,ac=0,adh=0; cafes.forEach(c=>{ const d=allCafesData[c]||{}; ta+=sum((d.caisseta||[]).filter(r=>r.semaine===w.label)); tc+=sum((d.tcam||[]).filter(r=>r.semaine===w.label),"montant"); dn+=sum((d.dons||[]).filter(r=>r.semaine===w.label),"montant"); ac+=sum((d.achats||[]).filter(r=>r.semaine===w.label),"montant"); adh+=sum((d.adhesion||[]).filter(r=>r.semaine===w.label),"total"); }); return{week:w.label,ta,tc,dn,ac,adh,total:ta+tc+dn+adh}; }).filter(r=>r.ta+r.tc+r.dn+r.ac+r.adh>0);
+        { const curIdx=WEEKS_2026.findIndex(w=>w.label===getCurrentWeekLabel()); const start=curIdx>=0?curIdx:0; const weeksDesc=WEEKS_2026.slice(Math.max(0,start-19),start+1).slice().reverse(); weekly=weeksDesc.map(w=>{ let ta=0,tc=0,dn=0,ac=0,adh=0; cafes.forEach(c=>{ const d=allCafesData[c]||{}; ta+=sum((d.caisseta||[]).filter(r=>r.semaine===w.label)); tc+=sum((d.tcam||[]).filter(r=>r.semaine===w.label),"montant"); dn+=sum((d.dons||[]).filter(r=>r.semaine===w.label),"montant"); ac+=sum((d.achats||[]).filter(r=>r.semaine===w.label),"montant"); adh+=sum((d.adhesion||[]).filter(r=>r.semaine===w.label),"total"); }); return{week:w.label,ta,tc,dn,ac,adh,total:ta+tc+dn+adh}; }).filter(r=>r.ta+r.tc+r.dn+r.ac+r.adh>0); }
       } catch(wErr) { console.error("WEEKLY CRASH:", wErr.message); }
 
       const handleExport=()=>{ const p=ft==="week"?sw:ft==="month"?`M${sm}`:"all"; const rows=[]; cafes.forEach(c=>{ const d=allCafesData[c]||{}; const fn=r=>{ const d=r.date||r.date_evenement; if(!d)return false; if(ft==="week")return r.semaine===sw; if(ft==="month")return r.mois===sm; return true; }; ["caisseta","tcam","dons","achats","privatisation"].forEach(s=>(d[s]||[]).filter(fn).forEach(r=>rows.push({Café:c,Section:s.toUpperCase(),...normalizeRow(r,s)}))); explodeAdhesion((d.adhesion||[]).filter(fn),c).forEach(r=>rows.push({...r})); (d.restocollective||[]).filter(fn).forEach(r=>rows.push({Café:c,Section:"RESTOCOLLECTIVE",...normalizeRow(r,"restocollective")})); }); buildAndDownloadCSV(rows,`DaddyCafe_GLOBAL_${p}_${new Date().toISOString().slice(0,10)}.csv`); };
