@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>☕ Daddy'Pay — La solution caisse de Chez Daddy</title>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
   <style>
@@ -36,10 +36,12 @@
             ...(opts.headers||{}) }
         });
         clearTimeout(timer);
-        if (!r.ok) { const t = await r.text(); console.error("Supabase error", r.status, t); return null; }
+        if (!r.ok) { const t = await r.text().catch(()=>""); console.error("Supabase error", r.status, t); return null; }
         // 204 No Content (succès sans body)
         if (r.status === 204) return true;
-        return r.json();
+        // Protéger r.json() contre les réponses vides ou tronquées (réseau instable)
+        try { return await r.json(); }
+        catch(jsonErr) { console.error("supaFetch: réponse JSON invalide", jsonErr.message); return null; }
       } catch(e) {
         clearTimeout(timer);
         console.error("supaFetch error:", e.message);
@@ -706,7 +708,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6 · Build du 11/06/2026 09:00</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6.1 · Build du 12/06/2026 13:34</p>
             </div>
           </div>
         </div>
