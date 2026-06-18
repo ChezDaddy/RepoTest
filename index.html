@@ -65,6 +65,7 @@
         if (res !== null) {
           _saveQueue.shift();
           resolve(true);
+          window.dispatchEvent(new CustomEvent("daddy_save_done"));
         } else {
           // Réessayer dans 5s
           await new Promise(r=>setTimeout(r,5000));
@@ -468,6 +469,10 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     };
     testSupabase();
 
+    // Keep-alive : évite la mise en pause du projet Supabase (plan gratuit, 7j d'inactivité)
+    // Ping léger toutes les 4 minutes tant que l'appli reste ouverte dans le navigateur.
+    setInterval(() => { supaFetch("/rest/v1/daddy_data?limit=1&select=cafe"); }, 4 * 60 * 1000);
+
     const loadData = async (cafe, section, bypassCache=false) => {
       const key = cafe + ":" + section;
       // Utiliser le cache mémoire sauf si on veut forcer un rechargement
@@ -708,7 +713,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6.1 · Build du 12/06/2026 13:34</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6.2 · Build du 18/06/2026</p>
             </div>
           </div>
         </div>
@@ -2237,11 +2242,10 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       // Indicateur de sauvegarde
       useEffect(()=>{
         const onStart = () => { setSaving(true); };
-        const onDone  = () => { setSaving(false); };
+        const onDone  = () => { setSaving(false); setSaveError(null); };
         const onError = (e) => {
           setSaving(false);
-          setSaveError("💾 Sauvegarde en cours…");
-          setTimeout(()=>setSaveError(null), 5000);
+          setSaveError("⚠️ ÉCHEC DE SAUVEGARDE — nouvelle tentative automatique en cours. NE FERMEZ PAS et NE RECHARGEZ PAS cette page tant que ce message reste affiché, sinon la donnée sera perdue.");
         };
         window.addEventListener("daddy_save_start", onStart);
         window.addEventListener("daddy_save_done",  onDone);
