@@ -37,10 +37,11 @@
         });
         clearTimeout(timer);
         if (!r.ok) { const t = await r.text().catch(()=>""); console.error("Supabase error", r.status, t); return null; }
-        // 204 No Content (succès sans body)
-        if (r.status === 204) return true;
-        // Protéger r.json() contre les réponses vides ou tronquées (réseau instable)
-        try { return await r.json(); }
+        // Lire le corps en texte brut d'abord : avec Prefer: return=minimal,
+        // le corps est vide (200/201/204 selon les cas) — r.json() plante alors systématiquement.
+        const txt = await r.text().catch(()=>"");
+        if (!txt) return true; // corps vide = succès (return=minimal)
+        try { return JSON.parse(txt); }
         catch(jsonErr) { console.error("supaFetch: réponse JSON invalide", jsonErr.message); return null; }
       } catch(e) {
         clearTimeout(timer);
