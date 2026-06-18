@@ -56,7 +56,9 @@
       if (_saveRunning || _saveQueue.length===0) return;
       _saveRunning = true;
       while (_saveQueue.length > 0) {
-        const {cafe, section, data, resolve} = _saveQueue[0];
+        const item = _saveQueue[0];
+        item._attempts = (item._attempts||0) + 1;
+        const {cafe, section, data, resolve} = item;
         const res = await supaFetch("/rest/v1/daddy_data", {
           method: "POST",
           headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
@@ -65,7 +67,13 @@
         if (res !== null) {
           _saveQueue.shift();
           resolve(true);
-          window.dispatchEvent(new CustomEvent("daddy_save_done"));
+          // Le bandeau ne se referme que si la file est totalement vidée
+          if (_saveQueue.length === 0) window.dispatchEvent(new CustomEvent("daddy_save_done"));
+        } else if (item._attempts >= 6) {
+          // Échec persistant (>30s, 6 tentatives) — on arrête de boucler en silence
+          // et on signale clairement un blocage réel à l'utilisateur.
+          _saveQueue.shift();
+          window.dispatchEvent(new CustomEvent("daddy_save_stuck", { detail: { cafe, section } }));
         } else {
           // Réessayer dans 5s
           await new Promise(r=>setTimeout(r,5000));
@@ -528,7 +536,8 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
             body: JSON.stringify({ cafe, section, data: dataToSave, updated_at: new Date().toISOString() })
           });
           if (res === null) throw new Error("INSERT failed");
-          window.dispatchEvent(new CustomEvent("daddy_save_done"));
+          // Le bandeau ne se referme que si aucune sauvegarde n'est encore bloquée en arrière-plan
+          if (_saveQueue.length === 0) window.dispatchEvent(new CustomEvent("daddy_save_done"));
 
           // Si une valeur plus récente est arrivée pendant qu'on sauvegardait → la sauvegarder aussi
           if (_savePending.has(key)) {
@@ -2247,13 +2256,19 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
           setSaving(false);
           setSaveError("⚠️ ÉCHEC DE SAUVEGARDE — nouvelle tentative automatique en cours. NE FERMEZ PAS et NE RECHARGEZ PAS cette page tant que ce message reste affiché, sinon la donnée sera perdue.");
         };
+        const onStuck = (e) => {
+          setSaving(false);
+          setSaveError("❌ SAUVEGARDE IMPOSSIBLE après plusieurs tentatives (café : " + e.detail.cafe + ", section : " + e.detail.section + "). Vérifiez votre connexion internet, puis ressaisissez cette donnée si nécessaire.");
+        };
         window.addEventListener("daddy_save_start", onStart);
         window.addEventListener("daddy_save_done",  onDone);
         window.addEventListener("daddy_save_error", onError);
+        window.addEventListener("daddy_save_stuck", onStuck);
         return () => {
           window.removeEventListener("daddy_save_start", onStart);
           window.removeEventListener("daddy_save_done",  onDone);
           window.removeEventListener("daddy_save_error", onError);
+          window.removeEventListener("daddy_save_stuck", onStuck);
         };
       }, []);
 
