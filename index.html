@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.0.0 · Build du 22/06/2026 09:10 -->
+<!-- DaddyPay v4.0.0 · Build du 22/06/2026 09:51 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -184,7 +184,7 @@
       "qte","Prix de vente unitaire","HT_PU","tva_taux","tva_unitaire","tva_total","ht_total","montant TTC payé",
       "montant_devis","devis_accepte","date_evenement",
       "civilite","prenom","nom","contact_nom","adresse","mail","telephone","date_naissance","annee_adhesion",
-      "cafe","adhesion_offerte","renouvellement","reseaux","de_passage","source_arrivee","roles_additionnels",
+      "cafe","adhesion_offerte","renouvellement","reseaux","de_passage","source_arrivee","roles_additionnels","talents",
       "mode","facture_teams","no_facture","commentaire","id","recorded_at","evenement_ta","created_le"
     ];
     const sortedHeaders = (rows) => {
@@ -663,12 +663,34 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
         source_arrivee: r.source_arrivee,
         mode: r.mode_reglement,
         roles_additionnels: (r.roles_additionnels||[]).map(x=>x.role).join(", "),
+        talents: r.talents||"",
         id: r.id,
         created_le: r.created_at ? r.created_at.slice(0,10).split("-").reverse().join("/") : "",
       }));
     };
     // Dérive un montant TCAM/adhésion classique conservé pour compatibilité ascendante (inutilisé v4.0.0+)
     const explodeAdhesion = (rows, cafe) => [];
+
+    // Export CSV dédié Adhérents — filtré par année d'adhésion (v4.0.0)
+    // Café unique : exportAdherentsCSV(cafe, annee)
+    // Tous cafés  : exportAdherentsCSV(null, annee, cafes)
+    const exportAdherentsCSV = async (cafe, annee, cafesList=null) => {
+      let rows = [];
+      if (cafesList) {
+        await Promise.all(cafesList.map(async c => {
+          const adherents = await loadData(c, "adherents");
+          const filtered = (adherents||[]).filter(a => parseInt(a.annee_adhesion)===parseInt(annee));
+          exportAdherents(filtered, c).forEach(r => rows.push(r));
+        }));
+      } else {
+        const adherents = await loadData(cafe, "adherents");
+        const filtered = (adherents||[]).filter(a => parseInt(a.annee_adhesion)===parseInt(annee));
+        rows = exportAdherents(filtered, cafe);
+      }
+      if (rows.length === 0) { alert(`Aucun adhérent pour l'année ${annee}.`); return; }
+      const suffix = cafesList ? "GLOBAL" : cafe;
+      buildAndDownloadCSV(rows, `DaddyPay_Adherents_${suffix}_${annee}.csv`);
+    };
 
     const exportToXLSX = (cafe, period, periodType, allData) => {
       const fn = (row) => { const d = row.date || row.date_evenement; if (!d) return false; if (periodType==="week") return row.semaine===period; if (periodType==="month") return row.mois===parseInt(period.replace("M","")); return true; };
@@ -723,7 +745,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 09:10</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 09:51</p>
             </div>
           </div>
         </div>
@@ -1129,8 +1151,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button onClick={()=>{
+                    const csvRows = recupSection==="adherents"
+                      ? exportAdherents(recupData, recupCafe)
+                      : recupData.map(r=>({Café:recupCafe,Section:recupSection.toUpperCase(),...normalizeRow(r,recupSection)}));
                     buildAndDownloadCSV(
-                      recupData.map(r=>({Café:recupCafe,Section:recupSection.toUpperCase(),...normalizeRow(r,recupSection)})),
+                      csvRows,
                       `BACKUP_${recupCafe}_${recupSection}_${new Date().toISOString().slice(0,10)}.csv`
                     );
                   }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
@@ -1216,7 +1241,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         <div className="space-y-6">
           {confirmId&&<ConfirmDialog msg="Confirmez-vous vouloir supprimer cette ligne ?" onOui={()=>del(confirmId)} onNon={()=>setConfirmId(null)}/>}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-            <h3 className="font-semibold text-gray-800 mb-4">🍺 Nouvelle commande TA</h3>
+            <h3 className="font-semibold text-gray-800 mb-4">🍸 Nouvelle commande TA</h3>
             <div className="mb-4 flex flex-wrap items-end gap-4">
               <div><label className="text-xs text-gray-500 block mb-1">Date</label><input type="date" value={date} onChange={e=>{setDate(e.target.value);setEvenementActif(false);setEvenementTexte("");}} className="w-48 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"/></div>
               <div className="flex items-center gap-2 pb-2">
@@ -1426,6 +1451,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const fTA=fil(allData.caisseta),fTCAM=fil(allData.tcam),fD=fil(allData.dons),fA=fil(allData.achats),fP=fil(allData.privatisation),fADH=fil(allData.adhesion),fRC=fil(allData.restocollective);
       const tTA=sum(fTA),tTCAM=sum(fTCAM,"montant"),tD=sum(fD,"montant"),tA=sum(fA,"montant"),tP=sum(fP,"montant_facture"),tADH=sum(fADH,"total"),tRC=sum(fRC,"prix_total");
       const handleExport=()=>{ const p=ft==="week"?sw:ft==="month"?`M${sm}`:"all"; exportToXLSX(cafe,p,ft,allData); };
+      const [anneeAdh,setAnneeAdh]=useState(defaultAnneeAdhesion());
+      const handleExportAdherents=()=>exportAdherentsCSV(cafe,anneeAdh);
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
         <div className="space-y-6">
@@ -1435,7 +1462,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               {ft==="week"&&<select value={sw} onChange={e=>setSw(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300">{WEEKS_2026.map(w=><option key={w.label} value={w.label}>{w.label} ({w.start.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})} → {w.end.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})})</option>)}</select>}
               {ft==="month"&&<select value={sm} onChange={e=>setSm(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300">{MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>}
             </div>
-            <button onClick={handleExport} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Exporter CSV</button>
+            <div className="flex gap-2 items-center flex-wrap">
+              <button onClick={handleExport} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Exporter CSV</button>
+              <select value={anneeAdh} onChange={e=>setAnneeAdh(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">{[defaultAnneeAdhesion()-2,defaultAnneeAdhesion()-1,defaultAnneeAdhesion(),defaultAnneeAdhesion()+1].map(a=><option key={a} value={a}>{a}</option>)}</select>
+              <button onClick={handleExportAdherents} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">💛 Extraction CSV Adhérents</button>
+            </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             <StatCard label="Total TA" value={`${tTA.toFixed(2)} €`} sub={`${fTA.length} lignes`} color="emerald"/>
@@ -1678,6 +1709,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         const rows = await collectAllData(cafes, filterFn);
         buildAndDownloadCSV(rows,`DaddyCafe_GLOBAL_${p}_${new Date().toISOString().slice(0,10)}.csv`);
       };
+      const [anneeAdh,setAnneeAdh]=useState(defaultAnneeAdhesion());
+      const handleExportAdherents=()=>exportAdherentsCSV(null,anneeAdh,cafes);
 
 
 
@@ -1698,9 +1731,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 {ft==="week"&&<select value={sw} onChange={e=>setSw(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{WEEKS_2026.map(w=><option key={w.label} value={w.label}>{w.label} ({w.start.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})} → {w.end.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})})</option>)}</select>}
                 {ft==="month"&&<select value={sm} onChange={e=>setSm(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center flex-wrap">
                 <button onClick={onForceRefresh} disabled={allCafesLoading} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">{allCafesLoading?"⏳ Chargement…":"🔄 Actualiser"}</button>
                 <button onClick={handleExport} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Exporter CSV (tous cafés)</button>
+                <select value={anneeAdh} onChange={e=>setAnneeAdh(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">{[defaultAnneeAdhesion()-2,defaultAnneeAdhesion()-1,defaultAnneeAdhesion(),defaultAnneeAdhesion()+1].map(a=><option key={a} value={a}>{a}</option>)}</select>
+                <button onClick={handleExportAdherents} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">💛 Extraction CSV Adhérents (tous cafés)</button>
               </div>
             </div>
             {/* KPIs */}
@@ -1860,6 +1895,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       source_arrivee: "",
       mode_reglement: "CB",
       roles_additionnels: [],   // [{role, date_formation, date_debut, date_fin}]
+      talents: "",
     });
 
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1891,7 +1927,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       struc_Espèces:"", struc_CB:"", struc_Chèque:"", struc_Virement:"", struc_Prélèvement:"",
     });
 
-    const SectionAdhesion = ({ cafe, refreshTick=0 }) => {
+    const SectionAdhesion = ({ cafe, refreshTick=0, cafes=[] }) => {
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [form,setForm]=useState(()=>({...mkAdherentForm(), cafe}));
       const [editId,setEditId]=useState(null);
@@ -2024,7 +2060,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
           {/* Formulaire fiche adhérent */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-            <h3 className="font-semibold text-gray-800 mb-4">{editId ? "✏️ Modifier l'adhérent" : "🤝 Nouvel adhérent"}</h3>
+            <h3 className="font-semibold text-gray-800 mb-4">{editId ? "✏️ Modifier l'adhérent" : "💛 Nouvel adhérent"}</h3>
 
             <div className="flex items-center gap-2 mb-4">
               <input type="checkbox" id="structCheck" checked={form.structure} onChange={e=>setForm(f=>({...f,structure:e.target.checked}))} className="w-4 h-4 accent-indigo-500"/>
@@ -2057,11 +2093,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
               <div><label className="text-xs text-gray-500 block mb-1">Année d'adhésion *</label><input type="number" value={form.annee_adhesion} onChange={e=>setForm(f=>({...f,annee_adhesion:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>
 
-              <div><label className="text-xs text-gray-500 block mb-1">Café *</label><input value={form.cafe} disabled className="w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-500"/></div>
+              <div><label className="text-xs text-gray-500 block mb-1">Café *</label><select value={form.cafe} onChange={e=>setForm(f=>({...f,cafe:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">{cafes.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
 
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Montant d'adhésion (€) *</label>
-                <input type="number" min="0" step="0.01" onWheel={e=>e.target.blur()} value={form.montant} onChange={e=>setForm(f=>({...f,montant:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" style={{MozAppearance:"textfield"}}/>
+                <input type="text" inputMode="decimal" value={form.montant} onChange={e=>{ const v=e.target.value; if(v===""||/^\d*[.,]?\d*$/.test(v)) setForm(f=>({...f,montant:v.replace(",",".")})); }} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
               </div>
 
               <div><label className="text-xs text-gray-500 block mb-1">Mode de règlement *</label><select value={form.mode_reglement} onChange={e=>setForm(f=>({...f,mode_reglement:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">{MODES_ADH.map(m=><option key={m}>{m}</option>)}</select></div>
@@ -2099,6 +2135,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   );
                 })}
               </div>
+            </div>}
+
+            {!form.structure && <div className="mb-4">
+              <label className="text-xs text-gray-500 block mb-1">Mes Talents <span className="text-gray-400">(facultatif)</span></label>
+              <textarea maxLength={200} rows={2} value={form.talents||""} onChange={e=>setForm(f=>({...f,talents:e.target.value}))} placeholder="Ex: bricolage, cuisine, musique…" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"/>
+              <p className="text-xs text-gray-400 mt-0.5">{(form.talents||"").length}/200</p>
             </div>}
 
             <div className="flex gap-2">
@@ -2462,9 +2504,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
     /* ── MAIN APP ── */
     const TABS_BASE = [
-      {id:"dashboard",label:"📊 Dashboard"},{id:"caisseta",label:"🍺 Caisse TA"},{id:"tcam",label:"🏠 TCAM"},
+      {id:"dashboard",label:"📊 Dashboard"},{id:"caisseta",label:"🍸 Caisse TA"},{id:"tcam",label:"🏠 TCAM"},
       {id:"dons",label:"💝 Dons"},{id:"achats",label:"🛒 Achats"},{id:"privatisation",label:"🎉 Privat."},
-      {id:"carte",label:"🃏 Carte"},{id:"monnaie",label:"💰 Monnaie"},{id:"adhesion",label:"🤝 Adhésion"},
+      {id:"carte",label:"🃏 Carte"},{id:"monnaie",label:"💰 Monnaie"},{id:"adhesion",label:"💛 Adhésion"},
     ];
 
     function App() {
@@ -2711,7 +2753,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   :tab==="privatisation" ?<SectionPrivatisation cafe={activeCafe} refreshTick={cafeRefreshTick}/>
                   :tab==="carte"         ?<SectionCarte cafe={activeCafe} carte={carte} setCarte={setCarte}/>
                   :tab==="monnaie"       ?<SectionMonnaie cafe={activeCafe}/>
-                  :tab==="adhesion"      ?<SectionAdhesion cafe={activeCafe} refreshTick={cafeRefreshTick}/>
+                  :tab==="adhesion"      ?<SectionAdhesion cafe={activeCafe} refreshTick={cafeRefreshTick} cafes={cafes}/>
                   :tab==="restocollective"?<SectionRestoCollective cafe={activeCafe} carte={carte} refreshTick={cafeRefreshTick}/>
                   :null
                 }
