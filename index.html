@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.0.0 · Build du 22/06/2026 10:17 -->
+<!-- DaddyPay v4.0.0 · Build du 22/06/2026 11:40 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -766,7 +766,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 10:17</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 11:40</p>
             </div>
           </div>
         </div>
@@ -1009,25 +1009,33 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
           {/* Réseaux adhérents (v4.0.0) */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-            <h3 className="font-semibold text-gray-800 mb-1">🌐 Réseaux adhérents</h3>
-            <p className="text-xs text-gray-500 mb-3">Réseaux proposés à la case à cocher dans la fiche adhérent. Un réseau avec une date de fin renseignée n'est plus proposé pour les nouvelles fiches.</p>
+            <h3 className="font-semibold text-gray-800 mb-1">🌐 Réseaux adhérents ({reseauxList.length})</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Réseaux proposés via case à cocher dans la fiche adhérent (ex: réseau d'entraide, association partenaire…).
+              À ne pas confondre avec la <strong>Source d'arrivée</strong> (RDC, flyer, bouche à oreille…) qui est une liste fixe non modifiable ici.
+              Un réseau avec une date de fin renseignée devient inactif et n'est plus proposé pour les nouvelles fiches.
+            </p>
             <div className="space-y-2 mb-3">
-              {reseauxList.map((r,i)=>(
-                <div key={i} className={`flex items-center gap-2 border rounded-xl p-2.5 ${r.date_fin?"border-gray-100 bg-gray-50 opacity-60":"border-sky-200 bg-sky-50"}`}>
-                  <span className="text-sm font-medium text-gray-700 flex-1">{r.nom}</span>
-                  <label className="text-xs text-gray-500">Début</label>
-                  <input type="date" value={r.date_debut||""} onChange={e=>{ const u=[...reseauxList]; u[i]={...u[i],date_debut:e.target.value}; saveReseauxAndRefresh(u); }} className="border border-gray-200 rounded-lg px-2 py-1 text-xs"/>
-                  <label className="text-xs text-gray-500">Fin</label>
-                  <input type="date" value={r.date_fin||""} onChange={e=>{ const u=[...reseauxList]; u[i]={...u[i],date_fin:e.target.value}; saveReseauxAndRefresh(u); }} className="border border-gray-200 rounded-lg px-2 py-1 text-xs"/>
-                  <button onClick={()=>{ const u=reseauxList.filter((_,j)=>j!==i); saveReseauxAndRefresh(u); }} className="text-rose-400 hover:text-rose-600 text-sm px-2">✕</button>
-                </div>
-              ))}
-              {reseauxList.length===0 && <p className="text-sm text-gray-400 italic">Aucun réseau configuré</p>}
+              {reseauxList.map((r,i)=>{
+                const inactif = !!r.date_fin;
+                return (
+                  <div key={i} className={`flex items-center gap-2 border rounded-xl p-2.5 ${inactif?"border-gray-200 bg-gray-50":"border-sky-200 bg-sky-50"}`}>
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${inactif?"bg-gray-200 text-gray-500":"bg-emerald-100 text-emerald-700"}`}>{inactif?"Inactif":"Actif"}</span>
+                    <span className="text-sm font-medium text-gray-700 flex-1">{r.nom}</span>
+                    <label className="text-xs text-gray-500">Début</label>
+                    <input type="date" value={r.date_debut||""} onChange={e=>{ const u=[...reseauxList]; u[i]={...u[i],date_debut:e.target.value}; saveReseauxAndRefresh(u); }} className="border border-gray-200 rounded-lg px-2 py-1 text-xs"/>
+                    <label className="text-xs text-gray-500">Fin</label>
+                    <input type="date" value={r.date_fin||""} onChange={e=>{ const u=[...reseauxList]; u[i]={...u[i],date_fin:e.target.value}; saveReseauxAndRefresh(u); }} className="border border-gray-200 rounded-lg px-2 py-1 text-xs"/>
+                    <button onClick={()=>{ if(!window.confirm(`Supprimer définitivement le réseau "${r.nom}" ?`))return; const u=reseauxList.filter((_,j)=>j!==i); saveReseauxAndRefresh(u); }} className="text-rose-400 hover:text-rose-600 text-sm px-2">✕</button>
+                  </div>
+                );
+              })}
+              {reseauxList.length===0 && <p className="text-sm text-gray-400 italic">Aucun réseau configuré pour le moment — ajoutez-en un ci-dessous.</p>}
             </div>
             <div className="flex gap-2">
               <input value={newReseauNom} onChange={e=>setNewReseauNom(e.target.value)}
                 onKeyDown={e=>{ if(e.key==="Enter"&&newReseauNom.trim()){ saveReseauxAndRefresh([...reseauxList,{nom:newReseauNom.trim(),date_debut:new Date().toISOString().slice(0,10),date_fin:""}]); setNewReseauNom(""); }}}
-                placeholder="Nom du réseau…" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"/>
+                placeholder="Nom du réseau… (ex: RDC)" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"/>
               <button onClick={()=>{ if(!newReseauNom.trim())return; saveReseauxAndRefresh([...reseauxList,{nom:newReseauNom.trim(),date_debut:new Date().toISOString().slice(0,10),date_fin:""}]); setNewReseauNom(""); }}
                 className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">Ajouter</button>
             </div>
@@ -1609,7 +1617,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead><tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="text-left px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold w-36">Indicateur</th>
+                  <th className="text-left px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold w-44">Indicateur</th>
                   {MONTHS.map((m,i)=><th key={i} className="text-right px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold">{m.slice(0,3).toUpperCase()}</th>)}
                   <th className="text-right px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold">TOTAL</th>
                 </tr></thead>
@@ -1617,29 +1625,54 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   {(()=>{
                     const adherents = allData.adherents||[];
                     const byMonthAdh = (arr, fn) => MONTHS.map((_,i)=>{ const mAdh=arr.filter(a=>getMonthForDate(a.date_adhesion)===i+1); return fn(mAdh); });
-                    const totalM   = byMonthAdh(adherents, m=>m.length);
-                    const nouveauxM = byMonthAdh(adherents, m=>m.filter(a=>!a.renouvellement).length);
-                    const montantM  = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
-                    const totTotal    = totalM.reduce((a,b)=>a+b,0);
-                    const totNouveaux = nouveauxM.reduce((a,b)=>a+b,0);
-                    const totMontant  = montantM.reduce((a,b)=>a+b,0);
-                    return <>
-                      <tr className="border-t border-gray-50 hover:bg-gray-50">
-                        <td className="px-3 py-2 font-medium text-violet-700">Nb total adhérents</td>
-                        {totalM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-violet-600">{v||"—"}</td>)}
-                        <td className="px-3 py-2 text-right font-bold text-violet-700">{totTotal}</td>
-                      </tr>
-                      <tr className="border-t border-gray-50 hover:bg-gray-50">
-                        <td className="px-3 py-2 font-medium text-sky-700">Nb nouveaux adhérents</td>
-                        {nouveauxM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-sky-600">{v||"—"}</td>)}
-                        <td className="px-3 py-2 text-right font-bold text-sky-700">{totNouveaux}</td>
-                      </tr>
-                      <tr className="border-t border-gray-100 bg-gray-50 hover:bg-gray-100">
-                        <td className="px-3 py-2 font-semibold text-gray-800">Montant total adhésions</td>
-                        {montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-700">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
-                        <td className="px-3 py-2 text-right font-bold text-gray-800">{totMontant.toFixed(0)}€</td>
-                      </tr>
-                    </>;
+                    const indiv = adherents.filter(a=>!a.structure);
+                    const struc = adherents.filter(a=>a.structure);
+                    const blocs = [
+                      {label:"Individuelles", data:indiv, color:"text-violet-700", colorV:"text-violet-600"},
+                      {label:"Structures",    data:struc, color:"text-amber-700",  colorV:"text-amber-600"},
+                    ];
+                    const rows = [];
+                    blocs.forEach(b=>{
+                      const totalM   = byMonthAdh(b.data, m=>m.length);
+                      const nouveauxM = byMonthAdh(b.data, m=>m.filter(a=>!a.renouvellement).length);
+                      const montantM  = byMonthAdh(b.data, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                      const totTotal=totalM.reduce((a,c)=>a+c,0), totNouveaux=nouveauxM.reduce((a,c)=>a+c,0), totMontant=montantM.reduce((a,c)=>a+c,0);
+                      rows.push(<tr key={b.label+"_tot"} className="border-t-2 border-gray-100 hover:bg-gray-50">
+                        <td className={`px-3 py-2 font-semibold ${b.color}`}>{b.label} — Nb total</td>
+                        {totalM.map((v,i)=><td key={i} className={`px-2 py-2 text-right ${b.colorV}`}>{v||"—"}</td>)}
+                        <td className={`px-3 py-2 text-right font-bold ${b.color}`}>{totTotal}</td>
+                      </tr>);
+                      rows.push(<tr key={b.label+"_new"} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-600">{b.label} — Nb nouveaux</td>
+                        {nouveauxM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{v||"—"}</td>)}
+                        <td className="px-3 py-2 text-right font-semibold text-gray-700">{totNouveaux}</td>
+                      </tr>);
+                      rows.push(<tr key={b.label+"_mt"} className="border-b border-gray-100 hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-600">{b.label} — Montant (€)</td>
+                        {montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
+                        <td className="px-3 py-2 text-right font-semibold text-gray-700">{totMontant.toFixed(0)}€</td>
+                      </tr>);
+                    });
+                    // Totaux combinés (individuelles + structures)
+                    const totalAllM   = byMonthAdh(adherents, m=>m.length);
+                    const nouveauxAllM = byMonthAdh(adherents, m=>m.filter(a=>!a.renouvellement).length);
+                    const montantAllM  = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                    rows.push(<tr key="tot_total" className="border-t-2 border-gray-200 bg-gray-50 hover:bg-gray-100">
+                      <td className="px-3 py-2 font-bold text-gray-800">TOUS — Nb total adhérents</td>
+                      {totalAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-800">{v||"—"}</td>)}
+                      <td className="px-3 py-2 text-right font-extrabold text-gray-900">{totalAllM.reduce((a,b)=>a+b,0)}</td>
+                    </tr>);
+                    rows.push(<tr key="tot_new" className="bg-gray-50 hover:bg-gray-100">
+                      <td className="px-3 py-2 font-bold text-gray-800">TOUS — Nb nouveaux adhérents</td>
+                      {nouveauxAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-800">{v||"—"}</td>)}
+                      <td className="px-3 py-2 text-right font-extrabold text-gray-900">{nouveauxAllM.reduce((a,b)=>a+b,0)}</td>
+                    </tr>);
+                    rows.push(<tr key="tot_mt" className="bg-gray-50 hover:bg-gray-100">
+                      <td className="px-3 py-2 font-bold text-gray-800">TOUS — Montant total (€)</td>
+                      {montantAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-800">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
+                      <td className="px-3 py-2 text-right font-extrabold text-gray-900">{montantAllM.reduce((a,b)=>a+b,0).toFixed(0)}€</td>
+                    </tr>);
+                    return rows;
                   })()}
                 </tbody>
               </table>
@@ -1738,6 +1771,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     const DashboardGlobal = ({ cafes, onCafeCreated, isAdmin, supaStatus=null, initialSubTab="dashboard", onSubTabChange=()=>{}, allCafesData={}, allCafesLoading=false, onForceRefresh=()=>{} }) => {
       const [ft,setFt]=useState("week"); const [sw,setSw]=useState(getCurrentWeekLabel); const [sm,setSm]=useState(new Date().getMonth()+1);
       const [subTab,setSubTab]=useState(initialSubTab);
+      const [anneeAdh,setAnneeAdh]=useState(defaultAnneeAdhesion());
+      const [adhFilter,setAdhFilter]=useState("all"); // "all" | "indiv" | "struc"
       useEffect(()=>{ if(initialSubTab!==subTab) setSubTab(initialSubTab); },[initialSubTab]);
 
       const forceRefresh = onForceRefresh;
@@ -1749,6 +1784,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const sum=(arr,k="prix_total")=>{ const r=safeArr(arr).reduce((s,r)=>s+(parseFloat(r[k])||0),0); return isFinite(r)?r:0; };
 
       // Guard : afficher spinner si données pas encore chargées — AVANT tout calcul
+      // (tous les hooks useState/useCallback sont déclarés AVANT ce guard pour respecter les règles des hooks)
       if (Object.keys(allCafesData).length === 0) {
         return <div className="p-12 text-center">
           <div className="text-4xl mb-4">⏳</div>
@@ -1775,7 +1811,6 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         const rows = await collectAllData(cafes, filterFn);
         buildAndDownloadCSV(rows,`DaddyCafe_GLOBAL_${p}_${new Date().toISOString().slice(0,10)}.csv`);
       };
-      const [anneeAdh,setAnneeAdh]=useState(defaultAnneeAdhesion());
       const handleExportAdherents=()=>exportAdherentsCSV(null,anneeAdh,cafes);
 
 
@@ -1923,13 +1958,22 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               </div>
             </div>
 
-            {/* ── SYNTHÈSE ADHÉRENTS — TOUS CAFÉS ── */}
+            {/* ── SYNTHÈSE ADHÉRENTS — TOUS CAFÉS (regroupé par café) ── */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="px-5 py-3 bg-gray-50 border-b border-gray-100"><h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par mois et par café 2026</h4></div>
+              <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+                <h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par café et par mois 2026</h4>
+                <div className="flex gap-1.5">
+                  {[["all","Tous"],["indiv","Individuelles"],["struc","Structures"]].map(([v,lbl])=>(
+                    <button key={v} onClick={()=>setAdhFilter(v)} className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${adhFilter===v?"bg-violet-500 text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{lbl}</button>
+                  ))}
+                </div>
+              </div>
               {(()=>{
                 const moisSel = [...Array(12).keys()].map(i=>i+1);
                 const perCafeMonth = cafes.map(c=>{
-                  const adherents = (allCafesData[c]||{}).adherents||[];
+                  let adherents = (allCafesData[c]||{}).adherents||[];
+                  if (adhFilter==="indiv") adherents = adherents.filter(a=>!a.structure);
+                  if (adhFilter==="struc") adherents = adherents.filter(a=>a.structure);
                   const totalM   = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).length);
                   const nouveauxM = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m && !a.renouvellement).length);
                   const montantM  = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
@@ -1941,34 +1985,52 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 const grandTotal = perCafeMonth.reduce((s,c)=>s+c.totTotal,0);
                 const grandNouveaux = perCafeMonth.reduce((s,c)=>s+c.totNouveaux,0);
                 const grandMontant = perCafeMonth.reduce((s,c)=>s+c.totMontant,0);
-                return <>
-                  {[
-                    {label:"Nb total adhérents", key:"totalM", tot:"totTotal", sumM:sumTotalM, grand:grandTotal, color:"text-violet-700", colorV:"text-violet-600"},
-                    {label:"Nb nouveaux adhérents", key:"nouveauxM", tot:"totNouveaux", sumM:sumNouveauxM, grand:grandNouveaux, color:"text-sky-700", colorV:"text-sky-600"},
-                    {label:"Montant adhésions (€)", key:"montantM", tot:"totMontant", sumM:sumMontantM, grand:grandMontant, color:"text-gray-800", colorV:"text-gray-700", isMontant:true},
-                  ].map(block=>(
-                    <div key={block.key} className="overflow-x-auto border-b border-gray-100 last:border-0">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 border-b border-gray-100">
-                            <th className="text-left px-3 py-2 text-gray-700 uppercase tracking-wide font-bold">{block.label}</th>
-                            {MONTHS.map((m,i)=><th key={i} className="text-right px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold">{m.slice(0,3).toUpperCase()}<br/><span className="text-gray-700 font-bold">{block.isMontant?`${block.sumM[i].toFixed(0)}€`:block.sumM[i]}</span></th>)}
-                            <th className="text-right px-3 py-2 text-gray-700 uppercase tracking-wide font-bold">TOTAL<br/><span className="font-extrabold">{block.isMontant?`${block.grand.toFixed(0)}€`:block.grand}</span></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {perCafeMonth.map(c=>(
-                            <tr key={c.cafe} className="border-t border-gray-50 hover:bg-gray-50">
-                              <td className="px-3 py-2 font-medium text-gray-700">{c.cafe}</td>
-                              {c[block.key].map((v,i)=><td key={i} className={`px-2 py-2 text-right ${block.colorV}`}>{block.isMontant?(v>0?`${v.toFixed(0)}€`:"—"):(v||"—")}</td>)}
-                              <td className={`px-3 py-2 text-right font-bold ${block.color}`}>{block.isMontant?`${c[block.tot].toFixed(0)}€`:c[block.tot]}</td>
+                const fmtN = (v) => v||"—";
+                const fmtE = (v) => v>0?`${v.toFixed(0)}€`:"—";
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100">
+                          <th className="text-left px-3 py-2 text-gray-700 uppercase tracking-wide font-bold w-32">Café</th>
+                          <th className="text-left px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold w-40">Indicateur</th>
+                          {MONTHS.map((m,i)=><th key={i} className="text-right px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold">
+                            {m.slice(0,3).toUpperCase()}<br/>
+                            <span className="text-violet-700 font-bold">{sumTotalM[i]}</span> / <span className="text-sky-700 font-bold">{sumNouveauxM[i]}</span><br/>
+                            <span className="text-gray-700 font-bold">{fmtE(sumMontantM[i])}</span>
+                          </th>)}
+                          <th className="text-right px-3 py-2 text-gray-700 uppercase tracking-wide font-bold">
+                            TOTAL<br/>
+                            <span className="text-violet-700 font-extrabold">{grandTotal}</span> / <span className="text-sky-700 font-extrabold">{grandNouveaux}</span><br/>
+                            <span className="text-gray-800 font-extrabold">{fmtE(grandMontant)}</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {perCafeMonth.map(c=>(
+                          <React.Fragment key={c.cafe}>
+                            <tr className="border-t-2 border-gray-100 hover:bg-gray-50">
+                              <td rowSpan={3} className="px-3 py-2 font-semibold text-gray-800 align-top border-r border-gray-50">{c.cafe}</td>
+                              <td className="px-3 py-2 text-violet-700">Nb total adhérents</td>
+                              {c.totalM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-violet-600">{fmtN(v)}</td>)}
+                              <td className="px-3 py-2 text-right font-bold text-violet-700">{c.totTotal}</td>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ))}
-                </>;
+                            <tr className="hover:bg-gray-50">
+                              <td className="px-3 py-2 text-sky-700">Nb nouveaux adhérents</td>
+                              {c.nouveauxM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-sky-600">{fmtN(v)}</td>)}
+                              <td className="px-3 py-2 text-right font-bold text-sky-700">{c.totNouveaux}</td>
+                            </tr>
+                            <tr className="border-b border-gray-100 hover:bg-gray-50">
+                              <td className="px-3 py-2 text-gray-600">Montant adhésions (€)</td>
+                              {c.montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-700">{fmtE(v)}</td>)}
+                              <td className="px-3 py-2 text-right font-bold text-gray-800">{fmtE(c.totMontant)}</td>
+                            </tr>
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
               })()}
             </div>
           </>}
@@ -2015,6 +2077,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const isValidEmail = (s) => !s || EMAIL_RE.test(s.trim());
+    // Téléphone FR : 0X XX XX XX XX (espaces/points/tirets tolérés) ou +33 X XX XX XX XX
+    const TEL_FR_RE = /^(0[1-9]([\s.\-]?\d{2}){4}|\+33[\s.\-]?[1-9]([\s.\-]?\d{2}){4})$/;
+    const isValidTelFR = (s) => !s || TEL_FR_RE.test(s.trim());
 
     // Dérive les anciens champs agrégés (total, indiv_{mode}, struc_{mode}) par semaine
     // depuis la liste détaillée d'adhérents — pour compatibilité avec Dashboard/P&L existants.
@@ -2049,6 +2114,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [reseaux,setReseaux]=useState([]);
       const [filters,setFilters]=useState({});
       const [dupAlert,setDupAlert]=useState(null); // { matches:[...], pendingForm }
+      const [telConfirm,setTelConfirm]=useState(false); // true = utilisateur a confirmé un numéro non FR
 
       useEffect(()=>{
         setLoading(true);
@@ -2063,7 +2129,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         return()=>window.removeEventListener("reseaux_updated",h);
       },[]);
 
-      const resetForm = () => { setForm({...mkAdherentForm(), cafe}); setEditId(null); };
+      const resetForm = () => { setForm({...mkAdherentForm(), cafe}); setEditId(null); setTelConfirm(false); };
 
       // ── Dédoublonnage ──
       const norm = (s) => (s||"").trim().toLowerCase();
@@ -2092,6 +2158,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         if (!isValidEmail(form.mail)) { alert("L'adresse mail n'est pas valide."); return; }
         if (form.structure && !form.adresse.trim()) { alert("L'adresse est obligatoire pour une structure."); return; }
         if (form.structure && !isValidEmail(form.mail)) { alert("Le mail est obligatoire pour une structure."); return; }
+
+        if (form.telephone.trim() && !isValidTelFR(form.telephone) && !telConfirm) {
+          if (!window.confirm(`Le numéro "${form.telephone}" ne ressemble pas à un numéro français standard.\n\nConfirmez-vous cette saisie (par exemple un numéro étranger) ?`)) return;
+          setTelConfirm(true);
+        }
 
         const dups = findDuplicates(form, rows);
         if (dups.length > 0 && !dupAlert) {
@@ -2202,7 +2273,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 {!isValidEmail(form.mail) && <p className="text-xs text-rose-500 mt-0.5">Format mail invalide</p>}
               </div>
 
-              <div><label className="text-xs text-gray-500 block mb-1">Téléphone *</label><input placeholder="06 12 34 56 78" value={form.telephone} onChange={e=>setForm(f=>({...f,telephone:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>
+              <div><label className="text-xs text-gray-500 block mb-1">Téléphone *</label><input placeholder="06 12 34 56 78" value={form.telephone} onChange={e=>{setForm(f=>({...f,telephone:e.target.value}));setTelConfirm(false);}} className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${!isValidTelFR(form.telephone)?"border-amber-300 focus:ring-amber-300":"border-gray-200 focus:ring-indigo-300"}`}/>
+                {!isValidTelFR(form.telephone) && <p className="text-xs text-amber-600 mt-0.5">⚠️ Ne ressemble pas à un numéro français — vérifiez la saisie (un numéro étranger reste accepté).</p>}</div>
 
               {!form.structure && <div><label className="text-xs text-gray-500 block mb-1">Date de naissance *</label><input type="date" value={form.date_naissance} onChange={e=>setForm(f=>({...f,date_naissance:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>}
 
