@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- DaddyPay v3.6.2 · Build du 22/06/2026 08:42 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -433,9 +434,11 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
 
     /* ── STORAGE HELPERS ── */
     const WEEKS_2026 = (() => {
-      const weeks = []; let d = new Date("2025-12-29");
+      // Construction en heure LOCALE (pas via parsing ISO qui force UTC)
+      // pour que la comparaison avec `today` (mis à minuit local) soit cohérente.
+      const weeks = []; let d = new Date(2025, 11, 29, 0, 0, 0, 0); // 29/12/2025 00:00 local
       for (let i = 1; i <= 53; i++) {
-        const end = new Date(d); end.setDate(end.getDate() + 6);
+        const end = new Date(d); end.setDate(end.getDate() + 6); end.setHours(23,59,59,999);
         weeks.push({ label: `S${i}`, start: new Date(d), end });
         d.setDate(d.getDate() + 7);
       }
@@ -708,7 +711,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v3.6.1 · Build du 22/06/2026 08:22</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v3.6.2 · Build du 22/06/2026 08:42</p>
             </div>
           </div>
         </div>
