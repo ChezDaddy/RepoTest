@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.0.0 · Build du 22/06/2026 09:51 -->
+<!-- DaddyPay v4.0.0 · Build du 22/06/2026 10:17 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -766,7 +766,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 09:51</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 10:17</p>
             </div>
           </div>
         </div>
@@ -1466,9 +1466,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
     /* ── DASHBOARD ── */
     const Dashboard = ({ cafe, rcOn=false, refreshTick=0 }) => {
-      const [allData,setAllData]=useState({caisseta:[],tcam:[],dons:[],achats:[],privatisation:[],adhesion:[],restocollective:[]}); const [loading,setLoading]=useState(true);
+      const [allData,setAllData]=useState({caisseta:[],tcam:[],dons:[],achats:[],privatisation:[],adhesion:[],adherents:[],restocollective:[]}); const [loading,setLoading]=useState(true);
       const [ft,setFt]=useState("week"); const [sw,setSw]=useState(getCurrentWeekLabel); const [sm,setSm]=useState(new Date().getMonth()+1);
-      useEffect(()=>{ (async()=>{ setLoading(true); const [caisseta,tcam,dons,achats,privatisation,adherents,restocollective]=await Promise.all([loadData(cafe,"caisseta"),loadData(cafe,"tcam"),loadData(cafe,"dons"),loadData(cafe,"achats"),loadData(cafe,"privatisation"),loadData(cafe,"adherents"),loadData(cafe,"restocollective")]); const adhesion=deriveAdhesionAgg(adherents||[]); setAllData({caisseta,tcam,dons,achats,privatisation,adhesion,restocollective}); setLoading(false); })(); },[cafe, refreshTick]);
+      useEffect(()=>{ (async()=>{ setLoading(true); const [caisseta,tcam,dons,achats,privatisation,adherents,restocollective]=await Promise.all([loadData(cafe,"caisseta"),loadData(cafe,"tcam"),loadData(cafe,"dons"),loadData(cafe,"achats"),loadData(cafe,"privatisation"),loadData(cafe,"adherents"),loadData(cafe,"restocollective")]); const adhesion=deriveAdhesionAgg(adherents||[]); setAllData({caisseta,tcam,dons,achats,privatisation,adhesion,adherents,restocollective}); setLoading(false); })(); },[cafe, refreshTick]);
       const fil=useCallback((arr)=>{ if(ft==="week")return arr.filter(r=>r.semaine===sw); if(ft==="month")return arr.filter(r=>r.mois===sm); return arr; },[ft,sw,sm]);
       const sum=(arr,k="prix_total")=>arr.reduce((s,r)=>s+(parseFloat(r[k])||0),0);
       const fTA=fil(allData.caisseta),fTCAM=fil(allData.tcam),fD=fil(allData.dons),fA=fil(allData.achats),fP=fil(allData.privatisation),fADH=fil(allData.adhesion),fRC=fil(allData.restocollective);
@@ -1595,6 +1595,49 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                         <td className="px-3 py-2 font-medium text-gray-600">Marge opé. %</td>
                         {margeM.map((v,i)=><td key={i} className={`px-2 py-2 text-right ${v>=0?"text-emerald-600":"text-rose-600"}`}>{fmtPct(v,recM[i])}</td>)}
                         <td className={`px-3 py-2 text-right font-bold ${totMarge>=0?"text-emerald-700":"text-rose-700"}`}>{fmtPct(totMarge,totRec)}</td>
+                      </tr>
+                    </>;
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* ── SYNTHÈSE ADHÉRENTS ── */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="px-5 py-3 bg-gray-50 border-b border-gray-100"><h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par mois 2026</h4></div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="bg-gray-50 border-b border-gray-100">
+                  <th className="text-left px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold w-36">Indicateur</th>
+                  {MONTHS.map((m,i)=><th key={i} className="text-right px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold">{m.slice(0,3).toUpperCase()}</th>)}
+                  <th className="text-right px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold">TOTAL</th>
+                </tr></thead>
+                <tbody>
+                  {(()=>{
+                    const adherents = allData.adherents||[];
+                    const byMonthAdh = (arr, fn) => MONTHS.map((_,i)=>{ const mAdh=arr.filter(a=>getMonthForDate(a.date_adhesion)===i+1); return fn(mAdh); });
+                    const totalM   = byMonthAdh(adherents, m=>m.length);
+                    const nouveauxM = byMonthAdh(adherents, m=>m.filter(a=>!a.renouvellement).length);
+                    const montantM  = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                    const totTotal    = totalM.reduce((a,b)=>a+b,0);
+                    const totNouveaux = nouveauxM.reduce((a,b)=>a+b,0);
+                    const totMontant  = montantM.reduce((a,b)=>a+b,0);
+                    return <>
+                      <tr className="border-t border-gray-50 hover:bg-gray-50">
+                        <td className="px-3 py-2 font-medium text-violet-700">Nb total adhérents</td>
+                        {totalM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-violet-600">{v||"—"}</td>)}
+                        <td className="px-3 py-2 text-right font-bold text-violet-700">{totTotal}</td>
+                      </tr>
+                      <tr className="border-t border-gray-50 hover:bg-gray-50">
+                        <td className="px-3 py-2 font-medium text-sky-700">Nb nouveaux adhérents</td>
+                        {nouveauxM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-sky-600">{v||"—"}</td>)}
+                        <td className="px-3 py-2 text-right font-bold text-sky-700">{totNouveaux}</td>
+                      </tr>
+                      <tr className="border-t border-gray-100 bg-gray-50 hover:bg-gray-100">
+                        <td className="px-3 py-2 font-semibold text-gray-800">Montant total adhésions</td>
+                        {montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-700">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
+                        <td className="px-3 py-2 text-right font-bold text-gray-800">{totMontant.toFixed(0)}€</td>
                       </tr>
                     </>;
                   })()}
@@ -1878,6 +1921,55 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   </tbody>
                 </table>
               </div>
+            </div>
+
+            {/* ── SYNTHÈSE ADHÉRENTS — TOUS CAFÉS ── */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+              <div className="px-5 py-3 bg-gray-50 border-b border-gray-100"><h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par mois et par café 2026</h4></div>
+              {(()=>{
+                const moisSel = [...Array(12).keys()].map(i=>i+1);
+                const perCafeMonth = cafes.map(c=>{
+                  const adherents = (allCafesData[c]||{}).adherents||[];
+                  const totalM   = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).length);
+                  const nouveauxM = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m && !a.renouvellement).length);
+                  const montantM  = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                  return { cafe:c, totalM, nouveauxM, montantM,
+                    totTotal: totalM.reduce((a,b)=>a+b,0), totNouveaux: nouveauxM.reduce((a,b)=>a+b,0), totMontant: montantM.reduce((a,b)=>a+b,0) };
+                });
+                const sumCol = (key) => moisSel.map((_,i)=>perCafeMonth.reduce((s,c)=>s+c[key][i],0));
+                const sumTotalM = sumCol("totalM"), sumNouveauxM = sumCol("nouveauxM"), sumMontantM = sumCol("montantM");
+                const grandTotal = perCafeMonth.reduce((s,c)=>s+c.totTotal,0);
+                const grandNouveaux = perCafeMonth.reduce((s,c)=>s+c.totNouveaux,0);
+                const grandMontant = perCafeMonth.reduce((s,c)=>s+c.totMontant,0);
+                return <>
+                  {[
+                    {label:"Nb total adhérents", key:"totalM", tot:"totTotal", sumM:sumTotalM, grand:grandTotal, color:"text-violet-700", colorV:"text-violet-600"},
+                    {label:"Nb nouveaux adhérents", key:"nouveauxM", tot:"totNouveaux", sumM:sumNouveauxM, grand:grandNouveaux, color:"text-sky-700", colorV:"text-sky-600"},
+                    {label:"Montant adhésions (€)", key:"montantM", tot:"totMontant", sumM:sumMontantM, grand:grandMontant, color:"text-gray-800", colorV:"text-gray-700", isMontant:true},
+                  ].map(block=>(
+                    <div key={block.key} className="overflow-x-auto border-b border-gray-100 last:border-0">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-100">
+                            <th className="text-left px-3 py-2 text-gray-700 uppercase tracking-wide font-bold">{block.label}</th>
+                            {MONTHS.map((m,i)=><th key={i} className="text-right px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold">{m.slice(0,3).toUpperCase()}<br/><span className="text-gray-700 font-bold">{block.isMontant?`${block.sumM[i].toFixed(0)}€`:block.sumM[i]}</span></th>)}
+                            <th className="text-right px-3 py-2 text-gray-700 uppercase tracking-wide font-bold">TOTAL<br/><span className="font-extrabold">{block.isMontant?`${block.grand.toFixed(0)}€`:block.grand}</span></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {perCafeMonth.map(c=>(
+                            <tr key={c.cafe} className="border-t border-gray-50 hover:bg-gray-50">
+                              <td className="px-3 py-2 font-medium text-gray-700">{c.cafe}</td>
+                              {c[block.key].map((v,i)=><td key={i} className={`px-2 py-2 text-right ${block.colorV}`}>{block.isMontant?(v>0?`${v.toFixed(0)}€`:"—"):(v||"—")}</td>)}
+                              <td className={`px-3 py-2 text-right font-bold ${block.color}`}>{block.isMontant?`${c[block.tot].toFixed(0)}€`:c[block.tot]}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </>;
+              })()}
             </div>
           </>}
         </div>
