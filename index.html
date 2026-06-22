@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.0.0 · Build du 22/06/2026 11:55 -->
+<!-- DaddyPay v4.0.0 · Build du 22/06/2026 12:25 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -766,7 +766,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 11:55</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 12:25</p>
             </div>
           </div>
         </div>
@@ -807,6 +807,8 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const [recupData,setRecupData]       = useState(null); // null=pas lu, []=vide, [...]= données
       const [recupSupa,setRecupSupa]       = useState(null); // données actuelles dans Supabase
       const [recupMsg,setRecupMsg]         = useState("");
+      const [repairMsg,setRepairMsg]       = useState("");
+      const [repairRunning,setRepairRunning] = useState(false);
       const [allDest,setAllDest] = useState(()=>loadAllDestinations());
       const [destCafe,setDestCafe] = useState("_default");
       const [newDest,setNewDest] = useState("");
@@ -1109,6 +1111,46 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">Ajouter</button>
             </div>
             <p className="text-xs text-gray-400 mt-2">La liste commune s'applique aux cafés sans liste spécifique.</p>
+          </div>
+
+          {/* Réparation des numéros de semaine manquants */}
+          <div className="bg-white rounded-2xl shadow-sm border border-orange-100 p-5">
+            <h3 className="font-semibold text-gray-800 mb-1">🔧 Réparer les numéros de semaine manquants</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Certaines lignes saisies avant le 22/06/2026 peuvent avoir un numéro de semaine vide (bug corrigé depuis).
+              Cet outil recalcule la semaine (et le mois) à partir de la date de chaque ligne, pour tous les cafés et toutes les sections concernées.
+              Les lignes qui ont déjà un numéro de semaine ne sont pas modifiées.
+            </p>
+            <button disabled={repairRunning} onClick={async()=>{
+              setRepairRunning(true); setRepairMsg("Analyse en cours…");
+              let totalFixed = 0, totalChecked = 0;
+              const sections = ["caisseta","tcam","dons","achats","privatisation"];
+              for (const c of cafes) {
+                for (const s of sections) {
+                  const rows = await loadData(c, s);
+                  if (!rows || rows.length===0) continue;
+                  let changed = false;
+                  const dateField = s==="privatisation" ? "date_reglement" : "date";
+                  const fixed = rows.map(r => {
+                    totalChecked++;
+                    if (r.semaine) return r;
+                    const d = r[dateField] || r.date_evenement;
+                    if (!d) return r;
+                    const sem = getWeekForDate(d);
+                    const mois = getMonthForDate(d);
+                    if (!sem) return r;
+                    changed = true; totalFixed++;
+                    return { ...r, semaine: sem, mois: mois };
+                  });
+                  if (changed) await saveData(c, s, fixed);
+                }
+              }
+              setRepairMsg(`✅ Terminé : ${totalFixed} ligne(s) corrigée(s) sur ${totalChecked} ligne(s) vérifiée(s).`);
+              setRepairRunning(false);
+            }} className="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+              {repairRunning?"⏳ Réparation en cours…":"🔧 Lancer la réparation"}
+            </button>
+            {repairMsg && <p className="text-sm text-gray-600 mt-2">{repairMsg}</p>}
           </div>
 
           {/* Récupération d'urgence */}
