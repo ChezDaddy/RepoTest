@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.0.0 · Build du 22/06/2026 11:40 -->
+<!-- DaddyPay v4.0.0 · Build du 22/06/2026 11:55 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -766,7 +766,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 11:40</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 11:55</p>
             </div>
           </div>
         </div>
@@ -2113,6 +2113,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [editId,setEditId]=useState(null);
       const [reseaux,setReseaux]=useState([]);
       const [filters,setFilters]=useState({});
+      const [sortCol,setSortCol]=useState(null);
+      const [sortDir,setSortDir]=useState("asc"); // "asc" | "desc"
       const [dupAlert,setDupAlert]=useState(null); // { matches:[...], pendingForm }
       const [telConfirm,setTelConfirm]=useState(false); // true = utilisateur a confirmé un numéro non FR
 
@@ -2187,35 +2189,57 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const updRole = (role, field, val) => setForm(f=>({...f, roles_additionnels: f.roles_additionnels.map(r=>r.role===role?{...r,[field]:val}:r)}));
 
       // ── Filtres sur toutes les colonnes ──
+      const getRoleInfo = (r, roleName) => (r.roles_additionnels||[]).find(x=>x.role===roleName);
       const filteredRows = rows.filter(r => {
         return Object.entries(filters).every(([k,v]) => {
           if (!v) return true;
           if (k==="structure") return v==="oui" ? r.structure : !r.structure;
+          if (k==="renouvellement"||k==="de_passage"||k==="adhesion_offerte") return v==="oui" ? !!r[k] : !r[k];
           const val = r[k];
           return String(val??"").toLowerCase().includes(v.toLowerCase());
         });
-      }).sort((a,b)=> (b.created_at||"").localeCompare(a.created_at||"")); // plus récents en haut
+      }).sort((a,b) => {
+        if (!sortCol) return (b.created_at||"").localeCompare(a.created_at||""); // défaut : plus récents en haut
+        let va = a[sortCol], vb = b[sortCol];
+        if (sortCol==="montant") { va = parseFloat(va)||0; vb = parseFloat(vb)||0; }
+        else { va = String(va??"").toLowerCase(); vb = String(vb??"").toLowerCase(); }
+        const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        return sortDir==="asc" ? cmp : -cmp;
+      });
+
+      const toggleSort = (k) => {
+        if (sortCol===k) setSortDir(d=>d==="asc"?"desc":"asc");
+        else { setSortCol(k); setSortDir("asc"); }
+      };
+      const sortIcon = (k) => sortCol===k ? (sortDir==="asc"?" ▲":" ▼") : "";
 
       if (loading) return <div className="p-8 text-center text-gray-400">Chargement...</div>;
 
       const COLS = [
         {k:"date_adhesion", label:"Date adh.", w:"w-24"},
-        {k:"structure", label:"Structure", w:"w-20"},
-        {k:"civilite", label:"Civ.", w:"w-16"},
-        {k:"prenom", label:"Prénom", w:"w-28"},
-        {k:"nom", label:"NOM", w:"w-28"},
-        {k:"contact_nom", label:"Contact", w:"w-28"},
+        {k:"structure", label:"Structure", w:"w-20", type:"select", options:[["oui","Structure"],["non","Indiv."]]},
+        {k:"civilite", label:"Civ.", w:"w-16", type:"select", options:[["Mme","Mme"],["M.","M."]]},
+        {k:"prenom", label:"Prénom", w:"w-28", sortable:true},
+        {k:"nom", label:"NOM", w:"w-28", sortable:true},
+        {k:"contact_nom", label:"Contact", w:"w-28", sortable:true},
         {k:"adresse", label:"Adresse", w:"w-36"},
         {k:"mail", label:"Mail", w:"w-36"},
         {k:"telephone", label:"Tél.", w:"w-28"},
         {k:"date_naissance", label:"Naiss.", w:"w-24"},
         {k:"annee_adhesion", label:"Année", w:"w-20"},
-        {k:"cafe", label:"Café", w:"w-24"},
-        {k:"montant", label:"Montant", w:"w-20"},
-        {k:"renouvellement", label:"Renouv.", w:"w-20"},
-        {k:"de_passage", label:"Passage", w:"w-20"},
-        {k:"source_arrivee", label:"Source", w:"w-28"},
-        {k:"mode_reglement", label:"Mode", w:"w-20"},
+        {k:"cafe", label:"Café", w:"w-24", type:"select", options:cafes.map(c=>[c,c])},
+        {k:"montant", label:"Montant", w:"w-20", sortable:true},
+        {k:"mode_reglement", label:"Mode", w:"w-20", type:"select", options:MODES_ADH.map(m=>[m,m])},
+        {k:"adhesion_offerte", label:"Offerte", w:"w-20", type:"select", options:[["oui","Oui"],["non","Non"]]},
+        {k:"renouvellement", label:"Renouv.", w:"w-20", type:"select", options:[["oui","Oui"],["non","Non"]]},
+        {k:"reseaux", label:"Réseaux", w:"w-28"},
+        {k:"de_passage", label:"Passage", w:"w-20", type:"select", options:[["oui","Oui"],["non","Non"]]},
+        {k:"source_arrivee", label:"Source", w:"w-28", type:"select", options:SOURCES_ARRIVEE.map(s=>[s,s])},
+        {k:"_role_benevole", label:"Bénévole", w:"w-24"},
+        {k:"_role_talentueux", label:"Talentueux", w:"w-24"},
+        {k:"_role_tisseur", label:"Tisseur lien", w:"w-24"},
+        {k:"talents", label:"Talents", w:"w-32"},
+        {k:"created_at", label:"Créé le", w:"w-28"},
       ];
 
       return (
@@ -2338,19 +2362,27 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
           {/* Liste des adhérents */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
               <h4 className="font-semibold text-gray-700 text-sm">📋 Liste des adhérents ({filteredRows.length})</h4>
-              <button onClick={()=>resetForm()} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">+ Nouvel adhérent</button>
+              <div className="flex gap-2">
+                <button onClick={()=>{setFilters({});setSortCol(null);setSortDir("asc");}} className="text-xs text-gray-500 hover:text-gray-700 font-medium border border-gray-200 rounded-lg px-3 py-1.5">🗑️ Supprimer tous les filtres</button>
+                <button onClick={()=>resetForm()} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">+ Nouvel adhérent</button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="bg-gray-50">{COLS.map(c=><th key={c.k} className={`text-left px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold ${c.w}`}>{c.label}</th>)}<th className="px-2 py-2"></th></tr>
+                  <tr className="bg-gray-50">{COLS.map(c=>(
+                    <th key={c.k} className={`text-left px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold ${c.w} ${c.sortable?"cursor-pointer hover:text-indigo-600 select-none":""}`} onClick={()=>c.sortable&&toggleSort(c.k)}>
+                      {c.label}{c.sortable?sortIcon(c.k):""}
+                    </th>
+                  ))}<th className="px-2 py-2"></th></tr>
                   <tr className="bg-white">
                     {COLS.map(c=>(
                       <td key={c.k} className="px-2 py-1">
-                        {c.k==="structure"
-                          ? <select value={filters[c.k]||""} onChange={e=>setFilters(f=>({...f,[c.k]:e.target.value}))} className="w-full border border-gray-200 rounded px-1 py-1 text-xs"><option value="">Tous</option><option value="oui">Structure</option><option value="non">Indiv.</option></select>
+                        {c.type==="select"
+                          ? <select value={filters[c.k]||""} onChange={e=>setFilters(f=>({...f,[c.k]:e.target.value}))} className="w-full border border-gray-200 rounded px-1 py-1 text-xs"><option value="">Tous</option>{c.options.map(([v,lbl])=><option key={v} value={v}>{lbl}</option>)}</select>
+                          : c.k.startsWith("_role_")||c.k==="created_at" ? null
                           : <input value={filters[c.k]||""} onChange={e=>setFilters(f=>({...f,[c.k]:e.target.value}))} placeholder="filtrer…" className="w-full border border-gray-200 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-300"/>}
                       </td>
                     ))}
@@ -2358,7 +2390,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map(r=>(
+                  {filteredRows.map(r=>{
+                    const ben = getRoleInfo(r,"Bénévole"), tal = getRoleInfo(r,"Talentueux"), tis = getRoleInfo(r,"Tisseur de lien");
+                    return (
                     <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50">
                       <td className="px-2 py-2">{r.date_adhesion}</td>
                       <td className="px-2 py-2">{r.structure?"🏢 Structure":"👤 Indiv."}</td>
@@ -2373,16 +2407,23 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       <td className="px-2 py-2">{r.annee_adhesion}</td>
                       <td className="px-2 py-2">{r.cafe}</td>
                       <td className="px-2 py-2 font-semibold text-indigo-700">{(parseFloat(r.montant)||0).toFixed(2)}€</td>
-                      <td className="px-2 py-2">{r.renouvellement?"✓":""}</td>
-                      <td className="px-2 py-2">{r.de_passage?"✓":""}</td>
-                      <td className="px-2 py-2">{r.source_arrivee}</td>
                       <td className="px-2 py-2">{r.mode_reglement}</td>
+                      <td className="px-2 py-2">{r.adhesion_offerte?"✓":""}</td>
+                      <td className="px-2 py-2">{r.renouvellement?"✓":""}</td>
+                      <td className="px-2 py-2 truncate max-w-28">{(r.reseaux||[]).join(", ")}</td>
+                      <td className="px-2 py-2">{r.de_passage?"✓":""}</td>
+                      <td className="px-2 py-2 truncate max-w-28">{r.source_arrivee}</td>
+                      <td className="px-2 py-2">{ben?`✓ ${ben.date_debut||""}`:""}</td>
+                      <td className="px-2 py-2">{tal?`✓ ${tal.date_debut||""}`:""}</td>
+                      <td className="px-2 py-2">{tis?`✓ ${tis.date_debut||""}`:""}</td>
+                      <td className="px-2 py-2 truncate max-w-32">{r.talents}</td>
+                      <td className="px-2 py-2">{r.created_at?r.created_at.slice(0,10).split("-").reverse().join("/"):""}</td>
                       <td className="px-2 py-2 flex gap-1">
                         <button onClick={()=>editRow(r)} className="text-indigo-400 hover:text-indigo-600">✏️</button>
                         <button onClick={()=>delRow(r.id)} className="text-rose-400 hover:text-rose-600">✕</button>
                       </td>
                     </tr>
-                  ))}
+                  );})}
                   {filteredRows.length===0 && <tr><td colSpan={COLS.length+1} className="text-center py-6 text-gray-400">Aucun adhérent ne correspond aux filtres.</td></tr>}
                 </tbody>
               </table>
