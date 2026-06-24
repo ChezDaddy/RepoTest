@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.0.0 · Build du 22/06/2026 12:25 -->
+<!-- DaddyPay v4.0.1 · Build du 23/06/2026 12:54 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -94,8 +94,24 @@
     const CAFES_KEY   = "daddy_cafes_list";
     const INITIAL_CAFES = ["Autun","Croix-Rousse","La Madeleine","Caluire","Ste Foy lès Lyon","Douai","Clermont-Ferrand"];
 
-    const loadUsers    = () => { try { const r = localStorage.getItem(USERS_KEY);   return r ? JSON.parse(r) : DEFAULT_USERS; } catch { return DEFAULT_USERS; } };
-    const saveUsers    = (u) => { try { localStorage.setItem(USERS_KEY, JSON.stringify(u)); } catch {} };
+    // v4.0.1 : comptes centralisés dans Supabase (cafe="_config", section="users")
+    // pour qu'une réinitialisation de mot de passe se propage immédiatement à tous les postes.
+    // localStorage reste un fallback de secours si Supabase est temporairement inaccessible.
+    const loadUsersLocal = () => { try { const r = localStorage.getItem(USERS_KEY); return r ? JSON.parse(r) : DEFAULT_USERS; } catch { return DEFAULT_USERS; } };
+    const saveUsersLocal = (u) => { try { localStorage.setItem(USERS_KEY, JSON.stringify(u)); } catch {} };
+    // loadUsers() : tente Supabase d'abord (source de vérité), retombe sur le cache local sinon.
+    const loadUsers = async () => {
+      try {
+        const remote = await loadData("_config", "users", true);
+        if (remote && remote.length > 0) { saveUsersLocal(remote); return remote; }
+      } catch {}
+      return loadUsersLocal();
+    };
+    // saveUsers() : écrit sur Supabase (source de vérité, propagation immédiate) ET en local (fallback).
+    const saveUsers = async (u) => {
+      saveUsersLocal(u);
+      await saveData("_config", "users", u);
+    };
     const loadSession  = () => { try { const r = sessionStorage.getItem(SESSION_KEY); return r ? JSON.parse(r) : null; } catch { return null; } };
     const saveSession  = (s) => { try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch {} };
     const clearSession = () => { try { sessionStorage.removeItem(SESSION_KEY); } catch {} };
@@ -187,15 +203,19 @@
       "mode","facture_teams","no_facture","commentaire","id","recorded_at"
     ];
     // Export ADHÉRENTS — structure dédiée avec 1 colonne par rôle additionnel × par date
+    // Colonnes fixes — les colonnes "Réseau : X" sont ajoutées dynamiquement à la fin
+    // selon les réseaux existants (voir buildAdherentsColOrder).
     const CSV_COL_ORDER_ADHERENTS = [
       "Café","Structure","civilite","prenom","nom","contact_nom","adresse","mail","telephone",
       "date_naissance","annee_adhesion","Montant d'adhésion","mode de règlement",
-      "adhesion_offerte","renouvellement","reseaux","de_passage","source_arrivee",
+      "adhesion_offerte","renouvellement","de_passage","source_arrivee",
       "roles_additionnels \"bénévole\"","Bénévole : date formation","Bénévole : date début","Bénévole : date fin",
       "roles_additionnels \"Talentueux\"","Talentueux : date formation","Talentueux : date début","Talentueux : date fin",
       "roles_additionnels \"Tisseur de Lien\"","Tisseur de Lien : date formation","Tisseur de Lien : date début","Tisseur de Lien : date fin",
       "talents","id","created_le"
     ];
+    // Construit la liste de colonnes complète : colonnes fixes + 1 colonne "Réseau : X" par réseau, en fin de fichier
+    const buildAdherentsColOrder = (reseauxNoms) => [...CSV_COL_ORDER_ADHERENTS, ...reseauxNoms.map(n=>`Réseau : ${n}`)];
     const sortedHeaders = (rows, colOrder=CSV_COL_ORDER) => {
       // Toujours inclure toutes les colonnes de colOrder (vides si absentes)
       // + les colonnes supplémentaires présentes dans les données
@@ -647,13 +667,15 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     const MODES_ADH_ALL = ["Espèces","CB","Chèque","Virement","Prélèvement"];
     // Export CSV des fiches adhérent détaillées (v4.0.0)
     // Export CSV dédié Adhérents — structure : 1 colonne par rôle additionnel × par date
-    const exportAdherents = (rows, cafe) => {
+    // reseauxNoms : liste des noms de réseaux existants (actifs + inactifs) — chaque réseau devient
+    // une colonne dédiée oui/non en fin de fichier, pour permettre filtres et tableaux croisés.
+    const exportAdherents = (rows, cafe, reseauxNoms=[]) => {
       const getRole = (r, roleName) => (r.roles_additionnels||[]).find(x=>x.role===roleName);
       return rows.map(r => {
         const benevole   = getRole(r, "Bénévole");
         const talentueux = getRole(r, "Talentueux");
         const tisseur    = getRole(r, "Tisseur de lien");
-        return {
+        const out = {
           Café: cafe || r.cafe,
           Structure: r.structure ? "oui" : "non",
           civilite: r.civilite,
@@ -669,7 +691,6 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
           "mode de règlement": r.mode_reglement,
           adhesion_offerte: r.adhesion_offerte ? "oui" : "non",
           renouvellement: r.renouvellement ? "oui" : "non",
-          reseaux: (r.reseaux||[]).join(", "),
           de_passage: r.de_passage ? "oui" : "non",
           source_arrivee: r.source_arrivee,
           'roles_additionnels "bénévole"': benevole ? "oui" : "non",
@@ -688,6 +709,9 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
           id: r.id,
           created_le: r.created_at ? r.created_at.slice(0,10).split("-").reverse().join("/") : "",
         };
+        // Une colonne par réseau existant, en fin de fichier — oui/non
+        reseauxNoms.forEach(nom => { out[`Réseau : ${nom}`] = (r.reseaux||[]).includes(nom) ? "oui" : "non"; });
+        return out;
       });
     };
     // Dérive un montant TCAM/adhésion classique conservé pour compatibilité ascendante (inutilisé v4.0.0+)
@@ -697,21 +721,23 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     // Café unique : exportAdherentsCSV(cafe, annee)
     // Tous cafés  : exportAdherentsCSV(null, annee, cafes)
     const exportAdherentsCSV = async (cafe, annee, cafesList=null) => {
+      const reseauxAll = await loadReseaux();
+      const reseauxNoms = reseauxAll.map(r=>r.nom);
       let rows = [];
       if (cafesList) {
         await Promise.all(cafesList.map(async c => {
           const adherents = await loadData(c, "adherents");
           const filtered = (adherents||[]).filter(a => parseInt(a.annee_adhesion)===parseInt(annee));
-          exportAdherents(filtered, c).forEach(r => rows.push(r));
+          exportAdherents(filtered, c, reseauxNoms).forEach(r => rows.push(r));
         }));
       } else {
         const adherents = await loadData(cafe, "adherents");
         const filtered = (adherents||[]).filter(a => parseInt(a.annee_adhesion)===parseInt(annee));
-        rows = exportAdherents(filtered, cafe);
+        rows = exportAdherents(filtered, cafe, reseauxNoms);
       }
       if (rows.length === 0) { alert(`Aucun adhérent pour l'année ${annee}.`); return; }
       const suffix = cafesList ? "GLOBAL" : cafe;
-      buildAndDownloadCSV(rows, `DaddyPay_Adherents_${suffix}_${annee}.csv`, CSV_COL_ORDER_ADHERENTS);
+      buildAndDownloadCSV(rows, `DaddyPay_Adherents_${suffix}_${annee}.csv`, buildAdherentsColOrder(reseauxNoms));
     };
 
     // Export ACTIVITÉS café uniquement — pas de fiches adhérent (voir exportAdherentsCSV pour ça).
@@ -745,8 +771,11 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     /* ── LOGIN SCREEN ── */
     const LoginScreen = ({ onLogin }) => {
       const [login,setLogin]=useState(""); const [pwd,setPwd]=useState(""); const [err,setErr]=useState(""); const [show,setShow]=useState(false);
-      const submit = () => {
-        const users = loadUsers();
+      const [checking,setChecking]=useState(false);
+      const submit = async () => {
+        setChecking(true); setErr("");
+        const users = await loadUsers();
+        setChecking(false);
         const u = users.find(x => x.login===login.trim() && b64d(x.pwd)===pwd);
         if (u) { const s={login:u.login,role:u.role,cafe:u.cafe}; saveSession(s); onLogin(s); }
         else { setErr("Identifiant ou mot de passe incorrect."); setPwd(""); }
@@ -765,8 +794,8 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                 <div className="relative"><input type={show?"text":"password"} value={pwd} onChange={e=>setPwd(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="••••••••" className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 pr-10"/>
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
-              <button onClick={submit} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">Se connecter</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.0.0 · Build du 22/06/2026 12:25</p>
+              <button onClick={submit} disabled={checking} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">{checking?"Connexion…":"Se connecter"}</button>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.0.1 · Build du 23/06/2026 12:54</p>
             </div>
           </div>
         </div>
@@ -794,7 +823,9 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
 
     /* ── ADMIN PANEL ── */
     const AdminPanel = ({ cafes, onCafeCreated, supaStatus }) => {
-      const [users,setUsers]     = useState(loadUsers());
+      const [users,setUsers]     = useState(loadUsersLocal()); // affichage immédiat depuis le cache local, rafraîchi par Supabase ensuite
+      const [usersLoading,setUsersLoading] = useState(true);
+      useEffect(()=>{ loadUsers().then(u=>{ setUsers(u); setUsersLoading(false); }); },[]);
       const [editPwd,setEditPwd] = useState({});
       const [newCafe,setNewCafe] = useState({nom:"",login:"",pwd:""});
       const [ejsCfg,setEjsCfg]   = useState(loadEmailJSConfig());
@@ -833,20 +864,22 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
 
       const flash = (m,t="ok") => { setMsg(m); setMsgType(t); setTimeout(()=>setMsg(""),4000); };
 
-      const resetPwd = (login, newP) => {
+      const resetPwd = async (login, newP) => {
         if (!newP.trim()) return;
         const upd = users.map(u=>u.login===login?{...u,pwd:b64e(newP)}:u);
-        saveUsers(upd); setUsers(upd);
+        setUsers(upd);
+        await saveUsers(upd);
         setEditPwd(p=>{const n={...p};delete n[login];return n;});
-        flash(`✅ Mot de passe de « ${login} » mis à jour.`);
+        flash(`✅ Mot de passe de « ${login} » mis à jour — propagé immédiatement à tous les postes.`);
       };
 
-      const createCafe = () => {
+      const createCafe = async () => {
         if (!newCafe.nom.trim()||!newCafe.login.trim()||!newCafe.pwd.trim()) { flash("⚠️ Remplissez tous les champs.","err"); return; }
         if (users.find(u=>u.login===newCafe.login.trim())) { flash("⚠️ Ce login existe déjà.","err"); return; }
         if (cafes.includes(newCafe.nom.trim())) { flash("⚠️ Ce café existe déjà.","err"); return; }
         const newUser = { login:newCafe.login.trim(), pwd:b64e(newCafe.pwd), role:"cafe", cafe:newCafe.nom.trim() };
-        const updUsers = [...users, newUser]; saveUsers(updUsers); setUsers(updUsers);
+        const updUsers = [...users, newUser]; setUsers(updUsers);
+        await saveUsers(updUsers);
         const updCafes = [...cafes, newCafe.nom.trim()]; saveCafesList(updCafes); onCafeCreated(updCafes);
         flash(`✅ Café « ${newCafe.nom} » créé (login : ${newCafe.login}).`);
         setNewCafe({nom:"",login:"",pwd:""});
@@ -1014,7 +1047,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <h3 className="font-semibold text-gray-800 mb-1">🌐 Réseaux adhérents ({reseauxList.length})</h3>
             <p className="text-xs text-gray-500 mb-3">
               Réseaux proposés via case à cocher dans la fiche adhérent (ex: réseau d'entraide, association partenaire…).
-              À ne pas confondre avec la <strong>Source d'arrivée</strong> (RDC, flyer, bouche à oreille…) qui est une liste fixe non modifiable ici.
+              À ne pas confondre avec la <strong>Source d'arrivée</strong> (flyer, bouche à oreille, réseaux sociaux…) qui est une liste fixe non modifiable ici.
               Un réseau avec une date de fin renseignée devient inactif et n'est plus proposé pour les nouvelles fiches.
             </p>
             <div className="space-y-2 mb-3">
@@ -1037,7 +1070,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <div className="flex gap-2">
               <input value={newReseauNom} onChange={e=>setNewReseauNom(e.target.value)}
                 onKeyDown={e=>{ if(e.key==="Enter"&&newReseauNom.trim()){ saveReseauxAndRefresh([...reseauxList,{nom:newReseauNom.trim(),date_debut:new Date().toISOString().slice(0,10),date_fin:""}]); setNewReseauNom(""); }}}
-                placeholder="Nom du réseau… (ex: RDC)" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"/>
+                placeholder="Nom du réseau…" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"/>
               <button onClick={()=>{ if(!newReseauNom.trim())return; saveReseauxAndRefresh([...reseauxList,{nom:newReseauNom.trim(),date_debut:new Date().toISOString().slice(0,10),date_fin:""}]); setNewReseauNom(""); }}
                 className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">Ajouter</button>
             </div>
@@ -1221,15 +1254,21 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   {recupData.length>8&&<p className="text-xs text-gray-400 px-2 py-1">… et {recupData.length-8} ligne(s) de plus</p>}
                 </div>
                 <div className="flex gap-2 flex-wrap">
-                  <button onClick={()=>{
+                  <button onClick={async()=>{
                     const isAdh = recupSection==="adherents";
-                    const csvRows = isAdh
-                      ? exportAdherents(recupData, recupCafe)
-                      : recupData.map(r=>({Café:recupCafe,Section:recupSection.toUpperCase(),...normalizeRow(r,recupSection)}));
+                    let csvRows, colOrder;
+                    if (isAdh) {
+                      const reseauxNoms = (await loadReseaux()).map(r=>r.nom);
+                      csvRows = exportAdherents(recupData, recupCafe, reseauxNoms);
+                      colOrder = buildAdherentsColOrder(reseauxNoms);
+                    } else {
+                      csvRows = recupData.map(r=>({Café:recupCafe,Section:recupSection.toUpperCase(),...normalizeRow(r,recupSection)}));
+                      colOrder = CSV_COL_ORDER;
+                    }
                     buildAndDownloadCSV(
                       csvRows,
                       `BACKUP_${recupCafe}_${recupSection}_${new Date().toISOString().slice(0,10)}.csv`,
-                      isAdh ? CSV_COL_ORDER_ADHERENTS : CSV_COL_ORDER
+                      colOrder
                     );
                   }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
                     📥 Exporter en CSV
@@ -2083,7 +2122,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     /* ── SECTION ADHÉSION ── */
     const MODES_ADH = ["Espèces","CB","Chèque","Virement","Prélèvement"];
     const ROLES_ADDITIONNELS = ["Bénévole","Talentueux","Tisseur de lien"];
-    const SOURCES_ARRIVEE = ["RDC","flyer / magazine","en passant / vitrine","bouche à oreille","réseaux sociaux"];
+    const SOURCES_ARRIVEE = ["flyer / magazine","en passant / vitrine","bouche à oreille","réseaux sociaux"];
 
     // Année d'adhésion par défaut : année en cours (jan-nov), année suivante en décembre
     const defaultAnneeAdhesion = () => { const d=new Date(); return d.getMonth()===11 ? d.getFullYear()+1 : d.getFullYear(); };
