@@ -870,22 +870,11 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const [coutExtraAdmin,setCoutExtraAdmin] = useState(COUT_EXTRA_DEFAULT);
       const [delaiAdmin,setDelaiAdmin] = useState(DELAI_AUTO_REFUS_DEFAULT);
       const [remisesAdmin,setRemisesAdmin] = useState(REMISE_DEFAULT);
-      const [cafeServicesSel,setCafeServicesSel] = useState("");
-      const [servicesAdmin,setServicesAdmin] = useState([]);
-      const [newServiceForm,setNewServiceForm] = useState({groupe:"Consommations",label:"",unite:"unité",tarif:""});
       useEffect(()=>{ Promise.all([loadEntetesPrivat(), loadCoutExtra(), loadRemises(), loadDelaiAutoRefus()]).then(([e,c,r,dl])=>{ setEntetesPrivat(e); setCoutExtraAdmin(c); setRemisesAdmin(r); setDelaiAdmin(dl); }); },[]);
-      useEffect(()=>{ if(cafeServicesSel) loadServicesPrivat(cafeServicesSel).then(setServicesAdmin); },[cafeServicesSel]);
       const updEntete = (cafeNom, field, val) => { const upd={...entetesPrivat, [cafeNom]:{...(entetesPrivat[cafeNom]||{}), [field]:val}}; setEntetesPrivat(upd); saveEntetesPrivat(upd); };
       const updRemise = (type, val) => { const upd={...remisesAdmin, [type]:parseFloat(val)||0}; setRemisesAdmin(upd); saveRemises(upd); };
       const updCoutExtra = (val) => { const v=parseFloat(val)||0; setCoutExtraAdmin(v); saveCoutExtra(v); };
       const updDelaiAdmin = (val) => { const v=parseInt(val)||0; setDelaiAdmin(v); saveDelaiAutoRefus(v); };
-      const delServiceAdmin = (id) => { const upd=servicesAdmin.filter(s=>s.id!==id); setServicesAdmin(upd); saveServicesPrivat(cafeServicesSel, upd); };
-      const addServiceAdmin = () => {
-        if (!newServiceForm.label.trim() || !newServiceForm.tarif) return;
-        const newSvc = { id:"svc_"+Date.now(), groupe:newServiceForm.groupe, label:newServiceForm.label.trim(), unite:newServiceForm.unite, tarif:parseFloat(newServiceForm.tarif)||0, type:"conso" };
-        const upd = [...servicesAdmin, newSvc]; setServicesAdmin(upd); saveServicesPrivat(cafeServicesSel, upd);
-        setNewServiceForm({groupe:"Consommations",label:"",unite:"unité",tarif:""});
-      };
       const getDestForCafe = (c) => {
         if (allDest[c] !== undefined) return allDest[c];
         if (c !== "_default" && allDest["_default"] !== undefined) return [...allDest["_default"]];
@@ -1121,33 +1110,6 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 <input type="number" min="1" value={delaiAdmin} onChange={e=>updDelaiAdmin(e.target.value)} className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
               </div>
             </div>
-          </div>
-
-          {/* Privatisation — Catalogue de services par café */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-            <h3 className="font-semibold text-gray-800 mb-1">🎉 Privatisation — Catalogue de services</h3>
-            <p className="text-xs text-gray-500 mb-3">Liste des prestations et consommations proposées dans le devis, par café.</p>
-            <select value={cafeServicesSel} onChange={e=>setCafeServicesSel(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3"><option value="">— Choisir un café —</option>{cafes.map(c=><option key={c} value={c}>{c}</option>)}</select>
-            {cafeServicesSel && <>
-              <div className="space-y-1.5 mb-3 max-h-72 overflow-y-auto">
-                {servicesAdmin.map(s=>(
-                  <div key={s.id} className="flex items-center gap-2 text-xs border border-gray-50 rounded-lg px-2 py-1.5">
-                    <span className="text-gray-400 w-40 truncate">{s.groupe}</span>
-                    <span className="flex-1">{s.label}</span>
-                    <span className="text-gray-500 w-16">{s.unite}</span>
-                    <span className="font-semibold text-violet-700 w-16 text-right">{s.tarif.toFixed(2)}€</span>
-                    {s.type==="conso" && <button onClick={()=>delServiceAdmin(s.id)} className="text-rose-400 hover:text-rose-600">✕</button>}
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2 flex-wrap items-end border-t border-gray-100 pt-3">
-                <input placeholder="Nouvelle consommation…" value={newServiceForm.label} onChange={e=>setNewServiceForm(f=>({...f,label:e.target.value}))} className="flex-1 min-w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
-                <input placeholder="unité" value={newServiceForm.unite} onChange={e=>setNewServiceForm(f=>({...f,unite:e.target.value}))} className="w-20 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
-                <input type="number" placeholder="Tarif €" value={newServiceForm.tarif} onChange={e=>setNewServiceForm(f=>({...f,tarif:e.target.value}))} className="w-24 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
-                <button onClick={addServiceAdmin} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Ajouter</button>
-              </div>
-              <p className="text-xs text-gray-400 mt-2">Seules les lignes de la catégorie "Consommations" peuvent être ajoutées/supprimées ici. Les Options 1/2 et leurs composantes sont fixes.</p>
-            </>}
           </div>
 
           {/* Réseaux adhérents (v4.0.0) */}
@@ -1643,6 +1605,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [decisionType,setDecisionType]=useState("validé");
       const [paiementId,setPaiementId]=useState(null); // devis en cours de passage "payé"
       const [paiementForm,setPaiementForm]=useState(null); // {lignes_finales, mode, date_reglement}
+      const [newServiceForm,setNewServiceForm] = useState({groupe:"Consommations",label:"",unite:"unité",tarif:""});
+      const [anneeListe,setAnneeListe] = useState(new Date().getFullYear());
 
       useEffect(()=>{
         setLoading(true);
@@ -1666,6 +1630,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       },[cafe,refreshTick]);
 
       const entete = entetes[cafe] || {adresse:"",surface:"",jauge:"",siret:"",iban:""};
+      // Tarif Option 2 toujours dérivé de Option 1 + coût de l'extra — jamais une valeur stockée indépendante
+      const servicesCalc = getServicesAvecCalcul(services, coutExtra);
 
       const newDevis = () => {
         const base = mkDevisForm(cafe);
@@ -1674,7 +1640,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       };
       const editDevis = (r) => { setF(r); setEditId(r.id); setShowForm(true); };
 
-      const totaux = calcDevisTotaux(f.lignes, services, f.option_choisie, coutExtra, remises[f.type_client]||0);
+      const totaux = calcDevisTotaux(f.lignes, servicesCalc, f.option_choisie, coutExtra, remises[f.type_client]||0);
 
       const toggleLigne = (svcId, qteInitiale=1) => {
         setF(x=>{
@@ -1690,7 +1656,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         if (!f.date_evenement) { alert("La date de l'événement est obligatoire."); return; }
         if (f.telephone.trim() && !isValidTelFR(f.telephone)) { if(!window.confirm(`Le numéro "${f.telephone}" ne ressemble pas à un numéro français. Confirmez-vous cette saisie ?`)) return; }
         if (f.mail && !isValidEmail(f.mail)) { alert("L'adresse mail n'est pas valide."); return; }
-        if (f.lignes.filter(l=>{const svc=services.find(s=>s.id===l.id); return svc&&(svc.type==="option1"||svc.type==="option2");}).length === 0) {
+        if (f.lignes.filter(l=>{const svc=servicesCalc.find(s=>s.id===l.id); return svc&&(svc.type==="option1"||svc.type==="option2");}).length === 0) {
           alert("Une option de privatisation (Option 1 ou Option 2) est obligatoire."); return;
         }
         const clientLabel = f.structure ? (f.nom_entreprise||f.contact_nom) : `${f.prenom} ${f.nom}`.trim();
@@ -1729,7 +1695,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       };
       const updQteFinale = (svcId, qte) => setPaiementForm(pf=>({...pf, lignes_finales: pf.lignes_finales.map(l=>l.id===svcId?{...l,qte}:l)}));
 
-      const totauxFinaux = paiementForm ? (()=>{ const r = rows.find(x=>x.id===paiementId); return r ? calcDevisTotaux(paiementForm.lignes_finales, services, r.option_choisie, coutExtra, remises[r.type_client]||0) : {total:0}; })() : {total:0};
+      const totauxFinaux = paiementForm ? (()=>{ const r = rows.find(x=>x.id===paiementId); return r ? calcDevisTotaux(paiementForm.lignes_finales, servicesCalc, r.option_choisie, coutExtra, remises[r.type_client]||0) : {total:0}; })() : {total:0};
 
       const confirmPaiement = async () => {
         const r = rows.find(x=>x.id===paiementId);
@@ -1759,13 +1725,22 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         return <Badge color={colors[s]||"sky"}>{s}</Badge>;
       };
 
+      // Gestion du catalogue de services — à la main du café, directement dans cet onglet
+      const delService = (id) => { const upd=services.filter(s=>s.id!==id); setServices(upd); saveServicesPrivat(cafe, upd); };
+      const addService = () => {
+        if (!newServiceForm.label.trim() || !newServiceForm.tarif) return;
+        const newSvc = { id:"svc_"+Date.now(), groupe:newServiceForm.groupe, label:newServiceForm.label.trim(), unite:newServiceForm.unite, tarif:parseFloat(newServiceForm.tarif)||0, type:"conso" };
+        const upd = [...services, newSvc]; setServices(upd); saveServicesPrivat(cafe, upd);
+        setNewServiceForm({groupe:"Consommations",label:"",unite:"unité",tarif:""});
+      };
+
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
 
       // ── Impression devis / facture ──
       if (printDoc) {
         const d = printDoc.devis;
         const lignesAffichees = printDoc.type==="facture" ? (d.lignes_finales||d.lignes) : d.lignes;
-        const totauxDoc = calcDevisTotaux(lignesAffichees, services, d.option_choisie, coutExtra, remises[d.type_client]||0);
+        const totauxDoc = calcDevisTotaux(lignesAffichees, servicesCalc, d.option_choisie, coutExtra, remises[d.type_client]||0);
         const montantDoc = printDoc.type==="facture" ? d.montant_facture : d.montant_devis;
         const isFacture = printDoc.type==="facture";
         const recalculInferieur = isFacture && totauxDoc.total < d.montant_devis;
@@ -1812,7 +1787,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <table className="w-full text-xs mb-3">
                 <thead><tr className="border-b-2 border-gray-200"><th className="text-left py-1">Désignation</th><th className="text-right py-1">Qté</th><th className="text-right py-1">PU</th><th className="text-right py-1">Total</th></tr></thead>
                 <tbody>
-                  {lignesAffichees.filter(l=>l.qte>0).map(l=>{ const svc=services.find(s=>s.id===l.id); if(!svc) return null; return (
+                  {lignesAffichees.filter(l=>l.qte>0).map(l=>{ const svc=servicesCalc.find(s=>s.id===l.id); if(!svc) return null; return (
                     <tr key={l.id} className="border-b border-gray-50"><td className="py-1">{svc.label}</td><td className="text-right py-1">{l.qte} {svc.unite}</td><td className="text-right py-1">{svc.tarif.toFixed(2)}€</td><td className="text-right py-1">{(svc.tarif*l.qte).toFixed(2)}€</td></tr>
                   );})}
                 </tbody>
@@ -1862,7 +1837,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <h3 className="font-semibold text-gray-800">Finaliser le paiement</h3>
             <p className="text-xs text-gray-500">Ajustez les quantités finales si elles diffèrent du devis.</p>
             <div className="max-h-64 overflow-y-auto space-y-1.5">
-              {paiementForm.lignes_finales.map(l=>{ const svc=services.find(s=>s.id===l.id); if(!svc) return null; return (
+              {paiementForm.lignes_finales.map(l=>{ const svc=servicesCalc.find(s=>s.id===l.id); if(!svc) return null; return (
                 <div key={l.id} className="flex items-center gap-2 text-sm">
                   <span className="flex-1">{svc.label}</span>
                   <input type="number" min="0" value={l.qte} onChange={e=>updQteFinale(l.id, parseFloat(e.target.value)||0)} className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm"/>
@@ -1952,7 +1927,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 <div key={g} className="mb-4">
                   <p className="text-xs font-semibold text-violet-700 uppercase mb-2">{g}</p>
                   <div className="space-y-1.5">
-                    {services.filter(s=>s.groupe===g).map(s=>{
+                    {servicesCalc.filter(s=>s.groupe===g).map(s=>{
                       const ligne = f.lignes.find(l=>l.id===s.id);
                       const disabledOpt = (isOpt1Groupe||isOpt2Groupe) && groupeDisabled;
                       return (
@@ -2000,21 +1975,30 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       }
 
       // ── Liste des devis (vue par défaut) ──
+      const anneesDisponibles = [...new Set(rows.map(r=>r.date_evenement?.slice(0,4)).filter(Boolean))].sort((a,b)=>b-a);
+      if (!anneesDisponibles.includes(String(anneeListe))) anneesDisponibles.unshift(String(anneeListe));
+      const rowsAnnee = rows.filter(r=>r.date_evenement?.slice(0,4)===String(anneeListe));
+
       return (
         <div className="space-y-6">
           {confirmId&&<ConfirmDialog msg="Confirmez-vous vouloir supprimer ce devis ?" onOui={()=>del(confirmId)} onNon={()=>setConfirmId(null)}/>}
           {decisionModal}
           {paiementModal}
-          <div className="flex justify-between items-center">
-            <h3 className="font-semibold text-gray-800">🎉 Privatisations — {rows.length} devis</h3>
-            <button onClick={newDevis} className="bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">+ Créer devis</button>
+          <div className="flex justify-between items-center flex-wrap gap-2">
+            <h3 className="font-semibold text-gray-800">🎉 Privatisations — {rowsAnnee.length} devis ({anneeListe})</h3>
+            <div className="flex gap-2 items-center">
+              <select value={anneeListe} onChange={e=>setAnneeListe(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
+                {anneesDisponibles.map(a=><option key={a} value={a}>{a}</option>)}
+              </select>
+              <button onClick={newDevis} className="bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">+ Créer devis</button>
+            </div>
           </div>
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead><tr className="bg-gray-50">{["Date évt","Client","Type","Montant devis","Statut","Montant facturé","Mode","Date règl.","Actions"].map(h=><th key={h} className="text-left px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold">{h}</th>)}</tr></thead>
                 <tbody>
-                  {rows.map(r=>(
+                  {rowsAnnee.map(r=>(
                     <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50">
                       <td className="px-3 py-2">{r.date_evenement}</td>
                       <td className="px-3 py-2 font-medium">{r.client}</td>
@@ -2034,10 +2018,43 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       </td>
                     </tr>
                   ))}
-                  {rows.length===0 && <tr><td colSpan={9} className="text-center py-6 text-gray-400">Aucun devis pour le moment.</td></tr>}
+                  {rowsAnnee.length===0 && <tr><td colSpan={9} className="text-center py-6 text-gray-400">Aucun devis pour {anneeListe}.</td></tr>}
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* Catalogue de services — à la main du café */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <h3 className="font-semibold text-gray-800 mb-1">🍽️ Catalogue de services — {cafe}</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Prestations et consommations proposées dans vos devis. Le tarif d'<strong>Option 1</strong> (Privatisation des locaux) est à votre main.
+              Le tarif d'<strong>Option 2</strong> n'est jamais saisi directement : il se calcule automatiquement (Option 1 + coût horaire de l'extra, paramétré par le service Finance).
+              Vous pouvez par ailleurs ajouter ou retirer librement des consommations.
+            </p>
+            <div className="space-y-1.5 mb-3 max-h-80 overflow-y-auto">
+              {servicesCalc.map(s=>{
+                const isOpt2Locked = s.id==="opt2";
+                return (
+                <div key={s.id} className="flex items-center gap-2 text-xs border border-gray-50 rounded-lg px-2 py-1.5">
+                  <span className="text-gray-400 w-44 truncate">{s.groupe}</span>
+                  <span className="flex-1">{s.label}</span>
+                  <span className="text-gray-500 w-14">{s.unite}</span>
+                  {isOpt2Locked
+                    ? <span className="w-32 text-right text-xs font-semibold text-gray-400" title="Calculé : Option 1 + coût de l'extra">{s.tarif.toFixed(2)}€ <span className="italic">(calculé 🔒)</span></span>
+                    : <input type="number" min="0" step="0.5" value={s.tarif} onChange={e=>{ const v=parseFloat(e.target.value)||0; const upd=services.map(x=>x.id===s.id?{...x,tarif:v}:x); setServices(upd); saveServicesPrivat(cafe,upd); }} className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-right text-xs font-semibold text-violet-700"/>}
+                  {!isOpt2Locked && <span className="text-gray-400">€</span>}
+                  {s.type==="conso" && <button onClick={()=>delService(s.id)} className="text-rose-400 hover:text-rose-600 ml-1">✕</button>}
+                </div>
+              );})}
+            </div>
+            <div className="flex gap-2 flex-wrap items-end border-t border-gray-100 pt-3">
+              <input placeholder="Nouvelle consommation…" value={newServiceForm.label} onChange={e=>setNewServiceForm(f=>({...f,label:e.target.value}))} className="flex-1 min-w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+              <input placeholder="unité" value={newServiceForm.unite} onChange={e=>setNewServiceForm(f=>({...f,unite:e.target.value}))} className="w-20 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
+              <input type="number" placeholder="Tarif €" value={newServiceForm.tarif} onChange={e=>setNewServiceForm(f=>({...f,tarif:e.target.value}))} className="w-24 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
+              <button onClick={addService} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Ajouter</button>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">Le coût horaire de l'extra (Option 2) reste paramétré par le service Finance, dans Administration.</p>
           </div>
         </div>
       );
@@ -2666,7 +2683,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     const SERVICES_PRIVAT_DEFAULT = [
       {id:"opt1", groupe:"Option 1 : Privatisation simple des locaux", label:"Privatisation des locaux (écran, enceinte, kit karaoké)", unite:"h", tarif:30, type:"option1"},
       {id:"droit_bouchon", groupe:"Option 1 : Privatisation simple des locaux", label:"Droit de bouchon", unite:"pers.", tarif:3, type:"normal"},
-      {id:"opt2", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"Privatisation des locaux + Équipe (1 pers.) + bar ouvert", unite:"h", tarif:60, type:"option2"},
+      {id:"opt2", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"Privatisation des locaux + Équipe (1 pers.) + bar ouvert", unite:"h", tarif:60, type:"option2"}, // tarif ignoré en pratique — toujours recalculé via getServicesAvecCalcul (Option 1 + coût de l'extra)
       {id:"personnel2", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"2ème personnel", unite:"h", tarif:30, type:"normal"},
       {id:"conso_convive", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"1 conso. par convive", unite:"pers.", tarif:3, type:"normal"},
       {id:"thermos", groupe:"Consommations", label:"Thermos café 20 tasses OU chocolat chaud 10 tasses OU thé 10 tasses", unite:"unité", tarif:20, type:"conso"},
@@ -2691,6 +2708,15 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     // Calcul du prix total d'un devis : Privatisation (option1 ou option2 + extra), Consommations, Remise
     // La remise ne s'applique QUE sur le montant "option1" — y compris dans l'option 2 où elle ne porte
     // que sur la part équivalente à l'option 1 (le coût de l'extra n'est jamais remisé).
+    // Option 2 n'est PAS un tarif indépendant : c'est Option 1 + coût horaire de l'extra (paramètre Admin).
+    // Le tarif stocké dans le catalogue du café pour "opt2" est ignoré — toujours recalculé dynamiquement,
+    // pour que toute modification du tarif Option 1 (côté café) ou du coût extra (côté Admin) se répercute partout.
+    const getServicesAvecCalcul = (services, coutExtra) => {
+      const opt1 = services.find(s=>s.id==="opt1");
+      const tarifOpt1 = opt1 ? (parseFloat(opt1.tarif)||0) : 0;
+      return services.map(s => s.id==="opt2" ? {...s, tarif: tarifOpt1 + (parseFloat(coutExtra)||0)} : s);
+    };
+
     const calcDevisTotaux = (lignes, services, optionChoisie, coutExtra, tauxRemise) => {
       let montantPrivat = 0, montantConso = 0;
       lignes.forEach(l => {
