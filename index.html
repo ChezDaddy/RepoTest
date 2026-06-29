@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.1.0 · Build du 29/06/2026 10:39 -->
+<!-- DaddyPay v4.1.0 · Build du 29/06/2026 18:12 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -218,7 +218,7 @@
     // Colonnes fixes — les colonnes "Réseau : X" sont ajoutées dynamiquement à la fin
     // selon les réseaux existants (voir buildAdherentsColOrder).
     const CSV_COL_ORDER_ADHERENTS = [
-      "Café","Structure","civilite","prenom","nom","contact_nom","adresse","mail","telephone",
+      "Café","Structure","civilite","prenom","nom","contact_nom","adresse","code_postal","mail","telephone",
       "date_naissance","annee_adhesion","Montant d'adhésion","mode de règlement",
       "adhesion_offerte","renouvellement","de_passage","source_arrivee",
       "roles_additionnels \"bénévole\"","Bénévole : date formation","Bénévole : date début","Bénévole : date fin",
@@ -698,6 +698,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
           nom: r.nom?.toUpperCase(),
           contact_nom: r.contact_nom,
           adresse: r.adresse,
+          code_postal: r.code_postal,
           mail: r.mail,
           telephone: r.telephone,
           date_naissance: r.date_naissance,
@@ -810,7 +811,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} disabled={checking} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">{checking?"Connexion…":"Se connecter"}</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.1.0 · Build du 29/06/2026 10:39</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.1.0 · Build du 29/06/2026 18:12</p>
             </div>
           </div>
         </div>
@@ -2082,7 +2083,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               {ft==="month"&&<select value={sm} onChange={e=>setSm(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300">{MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>}
             </div>
             <div className="flex gap-2 items-center flex-wrap">
-              <button onClick={handleExport} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Exporter CSV</button>
+              <button onClick={handleExport} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Extraction CSV Conso</button>
               <select value={anneeAdh} onChange={e=>setAnneeAdh(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">{[defaultAnneeAdhesion()-2,defaultAnneeAdhesion()-1,defaultAnneeAdhesion(),defaultAnneeAdhesion()+1].map(a=><option key={a} value={a}>{a}</option>)}</select>
               <button onClick={handleExportAdherents} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">💛 Extraction CSV Adhérents</button>
             </div>
@@ -2096,6 +2097,27 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <StatCard label="Adhésions" value={`${tADH.toFixed(2)} €`} sub={`${fADH.length} saisies`} color="violet"/>
             {(rcOn||tRC>0)&&<StatCard label="Resto Collective" value={`${tRC.toFixed(2)} €`} sub={`${fRC.length} lignes (TTC)`} color="amber"/>}
             <StatCard label="Total encaissé" value={`${(tTA+tTCAM+tD+tP+tADH+tRC).toFixed(2)} €`} sub="TA + TCAM + Dons + Privat. + Adh. + RC" color="emerald"/>
+            {(()=>{
+              const todayMD = new Date().toISOString().slice(5,10); // "MM-DD"
+              const anniversaires = (allData.adherents||[]).filter(a=>!a.structure && a.date_naissance && a.date_naissance.slice(5,10)===todayMD);
+              if (anniversaires.length === 0) return null;
+              const ageDe = (dateNaissance) => {
+                const naissance = new Date(dateNaissance); const today = new Date();
+                let age = today.getFullYear() - naissance.getFullYear();
+                if (today.getMonth() < naissance.getMonth() || (today.getMonth()===naissance.getMonth() && today.getDate()<naissance.getDate())) age--;
+                return age;
+              };
+              return (
+                <div className="bg-white rounded-2xl shadow-sm border border-amber-100 p-4 col-span-2">
+                  <h4 className="text-sm font-semibold text-amber-700 mb-2">🎂 Bon anniversaire !</h4>
+                  <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    {anniversaires.map(a=>(
+                      <li key={a.id} className="text-sm text-gray-700">{a.prenom}, {a.nom?.toUpperCase()}, {ageDe(a.date_naissance)} ans</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
@@ -2240,6 +2262,13 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                         {montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
                         <td className="px-3 py-2 text-right font-semibold text-gray-700">{totMontant.toFixed(0)}€</td>
                       </tr>);
+                      const moyenneM = montantM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
+                      const moyenneTot = totTotal>0?totMontant/totTotal:0;
+                      rows.push(<tr key={b.label+"_avg"} className="border-b border-gray-100 hover:bg-gray-50 italic">
+                        <td className="px-3 py-2 text-gray-400">{b.label} — Montant moyen (€)</td>
+                        {moyenneM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-400">{v>0?`${v.toFixed(2)}€`:"—"}</td>)}
+                        <td className="px-3 py-2 text-right font-medium text-gray-500">{moyenneTot>0?`${moyenneTot.toFixed(2)}€`:"—"}</td>
+                      </tr>);
                     });
                     // Totaux combinés (individuelles + structures)
                     const totalAllM   = byMonthAdh(adherents, m=>m.length);
@@ -2259,6 +2288,14 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       <td className="px-3 py-2 font-bold text-gray-800">TOUS — Montant total (€)</td>
                       {montantAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-800">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
                       <td className="px-3 py-2 text-right font-extrabold text-gray-900">{montantAllM.reduce((a,b)=>a+b,0).toFixed(0)}€</td>
+                    </tr>);
+                    const moyenneAllM = montantAllM.map((v,i)=>totalAllM[i]>0?v/totalAllM[i]:0);
+                    const totAllTotal = totalAllM.reduce((a,b)=>a+b,0), totAllMontant = montantAllM.reduce((a,b)=>a+b,0);
+                    const moyenneAllTot = totAllTotal>0?totAllMontant/totAllTotal:0;
+                    rows.push(<tr key="tot_avg" className="bg-gray-50 hover:bg-gray-100 italic">
+                      <td className="px-3 py-2 font-medium text-gray-600">TOUS — Montant moyen (€)</td>
+                      {moyenneAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{v>0?`${v.toFixed(2)}€`:"—"}</td>)}
+                      <td className="px-3 py-2 text-right font-bold text-gray-700">{moyenneAllTot>0?`${moyenneAllTot.toFixed(2)}€`:"—"}</td>
                     </tr>);
                     return rows;
                   })()}
@@ -2422,7 +2459,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               </div>
               <div className="flex gap-2 items-center flex-wrap">
                 <button onClick={onForceRefresh} disabled={allCafesLoading} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">{allCafesLoading?"⏳ Chargement…":"🔄 Actualiser"}</button>
-                <button onClick={handleExport} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Exporter CSV (tous cafés)</button>
+                <button onClick={handleExport} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">📥 Extraction CSV Conso (tous cafés)</button>
                 <select value={anneeAdh} onChange={e=>setAnneeAdh(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">{[defaultAnneeAdhesion()-2,defaultAnneeAdhesion()-1,defaultAnneeAdhesion(),defaultAnneeAdhesion()+1].map(a=><option key={a} value={a}>{a}</option>)}</select>
                 <button onClick={handleExportAdherents} className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">💛 Extraction CSV Adhérents (tous cafés)</button>
               </div>
@@ -2565,8 +2602,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   const totalM   = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).length);
                   const nouveauxM = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m && !a.renouvellement).length);
                   const montantM  = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
-                  return { cafe:c, totalM, nouveauxM, montantM,
-                    totTotal: totalM.reduce((a,b)=>a+b,0), totNouveaux: nouveauxM.reduce((a,b)=>a+b,0), totMontant: montantM.reduce((a,b)=>a+b,0) };
+                  const totTotal = totalM.reduce((a,b)=>a+b,0), totNouveaux = nouveauxM.reduce((a,b)=>a+b,0), totMontant = montantM.reduce((a,b)=>a+b,0);
+                  const moyenneM = montantM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
+                  const moyenneTot = totTotal>0?totMontant/totTotal:0;
+                  return { cafe:c, totalM, nouveauxM, montantM, moyenneM, moyenneTot,
+                    totTotal, totNouveaux, totMontant };
                 });
                 const sumCol = (key) => moisSel.map((_,i)=>perCafeMonth.reduce((s,c)=>s+c[key][i],0));
                 const sumTotalM = sumCol("totalM"), sumNouveauxM = sumCol("nouveauxM"), sumMontantM = sumCol("montantM");
@@ -2575,6 +2615,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 const grandMontant = perCafeMonth.reduce((s,c)=>s+c.totMontant,0);
                 const fmtN = (v) => v||"—";
                 const fmtE = (v) => v>0?`${v.toFixed(0)}€`:"—";
+                const fmtE2 = (v) => v>0?`${v.toFixed(2)}€`:"—";
                 return (
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
@@ -2598,7 +2639,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                         {perCafeMonth.map(c=>(
                           <React.Fragment key={c.cafe}>
                             <tr className="border-t-2 border-gray-100 hover:bg-gray-50">
-                              <td rowSpan={3} className="px-3 py-2 font-semibold text-gray-800 align-top border-r border-gray-50">{c.cafe}</td>
+                              <td rowSpan={4} className="px-3 py-2 font-semibold text-gray-800 align-top border-r border-gray-50">{c.cafe}</td>
                               <td className="px-3 py-2 text-violet-700">Nb total adhérents</td>
                               {c.totalM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-violet-600">{fmtN(v)}</td>)}
                               <td className="px-3 py-2 text-right font-bold text-violet-700">{c.totTotal}</td>
@@ -2608,10 +2649,15 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                               {c.nouveauxM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-sky-600">{fmtN(v)}</td>)}
                               <td className="px-3 py-2 text-right font-bold text-sky-700">{c.totNouveaux}</td>
                             </tr>
-                            <tr className="border-b border-gray-100 hover:bg-gray-50">
+                            <tr className="hover:bg-gray-50">
                               <td className="px-3 py-2 text-gray-600">Montant adhésions (€)</td>
                               {c.montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-700">{fmtE(v)}</td>)}
                               <td className="px-3 py-2 text-right font-bold text-gray-800">{fmtE(c.totMontant)}</td>
+                            </tr>
+                            <tr className="border-b border-gray-100 hover:bg-gray-50 italic">
+                              <td className="px-3 py-2 text-gray-400">Montant moyen (€)</td>
+                              {c.moyenneM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-400">{fmtE2(v)}</td>)}
+                              <td className="px-3 py-2 text-right font-medium text-gray-500">{fmtE2(c.moyenneTot)}</td>
                             </tr>
                           </React.Fragment>
                         ))}
@@ -2784,6 +2830,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       nom: "",
       contact_nom: "",
       adresse: "",
+      code_postal: "",
       mail: "",
       telephone: "",
       date_naissance: "",
@@ -2948,6 +2995,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         {k:"nom", label:"NOM", w:"w-28", sortable:true},
         {k:"contact_nom", label:"Contact", w:"w-28", sortable:true},
         {k:"adresse", label:"Adresse", w:"w-36"},
+        {k:"code_postal", label:"CP", w:"w-16"},
         {k:"mail", label:"Mail", w:"w-36"},
         {k:"telephone", label:"Tél.", w:"w-28"},
         {k:"date_naissance", label:"Naiss.", w:"w-24"},
@@ -3015,6 +3063,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               {form.structure && <div><label className="text-xs text-gray-500 block mb-1">Contact (nom, prénom) *</label><input maxLength={80} value={form.contact_nom} onChange={e=>setForm(f=>({...f,contact_nom:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>}
 
               {form.structure && <div className="col-span-2"><label className="text-xs text-gray-500 block mb-1">Adresse *</label><input maxLength={200} value={form.adresse} onChange={e=>setForm(f=>({...f,adresse:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>}
+
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Code postal</label>
+                <input maxLength={5} inputMode="numeric" value={form.code_postal||""} onChange={e=>setForm(f=>({...f,code_postal:e.target.value.replace(/\D/g,"").slice(0,5)}))} placeholder="69000" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
+              </div>
 
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Mail {form.structure?"*":"(facultatif)"}</label>
@@ -3126,6 +3179,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       <td className="px-2 py-2 font-medium">{r.nom?.toUpperCase()}</td>
                       <td className="px-2 py-2">{r.contact_nom}</td>
                       <td className="px-2 py-2 truncate max-w-32">{r.adresse}</td>
+                      <td className="px-2 py-2">{r.code_postal}</td>
                       <td className="px-2 py-2 truncate max-w-32">{r.mail}</td>
                       <td className="px-2 py-2">{r.telephone}</td>
                       <td className="px-2 py-2">{r.date_naissance}</td>
