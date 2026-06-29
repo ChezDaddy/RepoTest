@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.0.1 · Build du 23/06/2026 12:54 -->
+<!-- DaddyPay v4.1.0 · Build du 29/06/2026 10:39 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -13,6 +13,18 @@
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; }
     * { box-sizing: border-box; }
+    @media print {
+      /* N'imprime QUE le contenu du devis/facture, masque tout le reste (header, menus, bandeaux) */
+      body * { visibility: hidden; }
+      #daddy-print-area, #daddy-print-area * { visibility: visible; }
+      #daddy-print-area {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%;
+        margin: 0; padding: 1rem;
+      }
+      @page { margin: 1cm; }
+    }
   </style>
 </head>
 <body>
@@ -199,7 +211,7 @@
       "Café","Section","date","semaine","mois",
       "produit","evenement","client","fournisseur","typo","destination",
       "qte","Prix de vente unitaire","HT_PU","tva_taux","tva_unitaire","tva_total","ht_total","montant TTC payé",
-      "montant_devis","devis_accepte","date_evenement",
+      "montant_devis","statut_devis","date_evenement",
       "mode","facture_teams","no_facture","commentaire","id","recorded_at"
     ];
     // Export ADHÉRENTS — structure dédiée avec 1 colonne par rôle additionnel × par date
@@ -240,17 +252,20 @@
         if (r[k] !== undefined) out[k] = r[k];
       });
 
-      // Colonnes spécifiques aux privatisations
+      // Colonnes spécifiques aux privatisations (v4.1.0 — cycle devis/facture)
       if (section === "privatisation") {
         if (r.client           !== undefined) out["client"]          = r.client;
         if (r.montant_devis    !== undefined) out["montant_devis"]   = r.montant_devis;
-        if (r.devis_accepte    !== undefined) out["devis_accepte"]   = r.devis_accepte;
+        if (r.statut           !== undefined) out["statut_devis"]    = r.statut; // créé | validé | refusé | payé
         if (r.date_evenement   !== undefined) out["date_evenement"]  = r.date_evenement;
-        // date, semaine, mois = date de FACTURE (date_reglement)
-        if (r.date_reglement) {
-          out["date"]    = r.date_reglement;
-          out["semaine"] = getWeekForDate(r.date_reglement);
-          out["mois"]    = getMonthForDate(r.date_reglement);
+        // mode uniquement renseigné une fois le devis payé
+        if (r.statut === "payé" && r.mode) out["mode"] = r.mode;
+        // date, semaine, mois = date de règlement si payé, sinon date de l'événement
+        const dateRef = r.date_reglement || r.date_evenement;
+        if (dateRef) {
+          out["date"]    = dateRef;
+          out["semaine"] = getWeekForDate(dateRef);
+          out["mois"]    = getMonthForDate(dateRef);
         }
       }
 
@@ -285,7 +300,7 @@
       if (section === "caisseta")            montantTTC = r.prix_total ?? null;
       else if (section === "restocollective") montantTTC = r.prix_total ?? r.montant ?? null;
       else if (section === "achats")         montantTTC = r.montant != null ? -Math.abs(parseFloat(r.montant)||0) : null;
-      else if (section === "privatisation")  montantTTC = r.montant_facture ?? null; // montant effectivement facturé
+      else if (section === "privatisation")  montantTTC = (r.statut === "payé") ? (r.montant_facture ?? null) : null; // seuls les devis payés sont comptabilisés
       else                                   montantTTC = r.montant ?? null; // TCAM, Dons
       if (montantTTC !== null) out["montant TTC payé"] = montantTTC;
 
@@ -795,7 +810,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} disabled={checking} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">{checking?"Connexion…":"Se connecter"}</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.0.1 · Build du 23/06/2026 12:54</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.1.0 · Build du 29/06/2026 10:39</p>
             </div>
           </div>
         </div>
@@ -849,6 +864,28 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
       const [newReseauNom,setNewReseauNom] = useState("");
       useEffect(()=>{ loadReseaux().then(setReseauxList); },[]);
       const saveReseauxAndRefresh = async (arr) => { setReseauxList(arr); await saveReseaux(arr); window.dispatchEvent(new CustomEvent("reseaux_updated")); };
+
+      // ── Privatisation v4.1.0 — paramètres Admin ──
+      const [entetesPrivat,setEntetesPrivat] = useState({});
+      const [coutExtraAdmin,setCoutExtraAdmin] = useState(COUT_EXTRA_DEFAULT);
+      const [delaiAdmin,setDelaiAdmin] = useState(DELAI_AUTO_REFUS_DEFAULT);
+      const [remisesAdmin,setRemisesAdmin] = useState(REMISE_DEFAULT);
+      const [cafeServicesSel,setCafeServicesSel] = useState("");
+      const [servicesAdmin,setServicesAdmin] = useState([]);
+      const [newServiceForm,setNewServiceForm] = useState({groupe:"Consommations",label:"",unite:"unité",tarif:""});
+      useEffect(()=>{ Promise.all([loadEntetesPrivat(), loadCoutExtra(), loadRemises(), loadDelaiAutoRefus()]).then(([e,c,r,dl])=>{ setEntetesPrivat(e); setCoutExtraAdmin(c); setRemisesAdmin(r); setDelaiAdmin(dl); }); },[]);
+      useEffect(()=>{ if(cafeServicesSel) loadServicesPrivat(cafeServicesSel).then(setServicesAdmin); },[cafeServicesSel]);
+      const updEntete = (cafeNom, field, val) => { const upd={...entetesPrivat, [cafeNom]:{...(entetesPrivat[cafeNom]||{}), [field]:val}}; setEntetesPrivat(upd); saveEntetesPrivat(upd); };
+      const updRemise = (type, val) => { const upd={...remisesAdmin, [type]:parseFloat(val)||0}; setRemisesAdmin(upd); saveRemises(upd); };
+      const updCoutExtra = (val) => { const v=parseFloat(val)||0; setCoutExtraAdmin(v); saveCoutExtra(v); };
+      const updDelaiAdmin = (val) => { const v=parseInt(val)||0; setDelaiAdmin(v); saveDelaiAutoRefus(v); };
+      const delServiceAdmin = (id) => { const upd=servicesAdmin.filter(s=>s.id!==id); setServicesAdmin(upd); saveServicesPrivat(cafeServicesSel, upd); };
+      const addServiceAdmin = () => {
+        if (!newServiceForm.label.trim() || !newServiceForm.tarif) return;
+        const newSvc = { id:"svc_"+Date.now(), groupe:newServiceForm.groupe, label:newServiceForm.label.trim(), unite:newServiceForm.unite, tarif:parseFloat(newServiceForm.tarif)||0, type:"conso" };
+        const upd = [...servicesAdmin, newSvc]; setServicesAdmin(upd); saveServicesPrivat(cafeServicesSel, upd);
+        setNewServiceForm({groupe:"Consommations",label:"",unite:"unité",tarif:""});
+      };
       const getDestForCafe = (c) => {
         if (allDest[c] !== undefined) return allDest[c];
         if (c !== "_default" && allDest["_default"] !== undefined) return [...allDest["_default"]];
@@ -1040,6 +1077,77 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <p>3. Créez un template avec les variables <code className="bg-blue-100 px-1 rounded">{'{{subject}}'}</code>, <code className="bg-blue-100 px-1 rounded">{'{{message}}'}</code>, <code className="bg-blue-100 px-1 rounded">{'{{to_email}}'}</code> → notez le <em>Template ID</em></p>
               <p>4. Copiez votre <em>Public Key</em> depuis Account → API Keys</p>
             </div>
+          </div>
+
+          {/* Privatisation — En-têtes café (v4.1.0) */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <h3 className="font-semibold text-gray-800 mb-1">🎉 Privatisation — En-têtes café</h3>
+            <p className="text-xs text-gray-500 mb-3">Adresse, surface, jauge, SIRET et IBAN par café — préremplissent l'en-tête de chaque devis.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="bg-gray-50">{["Café","Adresse","Surface","Jauge","SIRET","IBAN"].map(h=><th key={h} className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">{h}</th>)}</tr></thead>
+                <tbody>
+                  {cafes.map(c=>{ const e = entetesPrivat[c]||{}; return (
+                    <tr key={c} className="border-t border-gray-50">
+                      <td className="px-2 py-1.5 font-medium text-gray-700">{c}</td>
+                      <td className="px-2 py-1.5"><input value={e.adresse||""} onChange={ev=>updEntete(c,"adresse",ev.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs"/></td>
+                      <td className="px-2 py-1.5"><input value={e.surface||""} onChange={ev=>updEntete(c,"surface",ev.target.value)} className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-xs"/></td>
+                      <td className="px-2 py-1.5"><input value={e.jauge||""} onChange={ev=>updEntete(c,"jauge",ev.target.value)} className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-xs"/></td>
+                      <td className="px-2 py-1.5"><input value={e.siret||""} onChange={ev=>updEntete(c,"siret",ev.target.value)} className="w-32 border border-gray-200 rounded-lg px-2 py-1 text-xs"/></td>
+                      <td className="px-2 py-1.5"><input value={e.iban||""} onChange={ev=>updEntete(c,"iban",ev.target.value)} className="w-44 border border-gray-200 rounded-lg px-2 py-1 text-xs"/></td>
+                    </tr>
+                  );})}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Privatisation — Remises et coût extra */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <h3 className="font-semibold text-gray-800 mb-1">🎉 Privatisation — Remises et coût extra</h3>
+            <p className="text-xs text-gray-500 mb-3">Taux de remise par type de client (appliqué uniquement sur la part Privatisation). Coût horaire de l'extra pour l'Option 2.</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+              {TYPES_CLIENT.map(t=>(
+                <div key={t}><label className="text-xs text-gray-500 block mb-1">{t}</label>
+                  <div className="flex items-center gap-1"><input type="number" min="0" max="100" value={remisesAdmin[t]??0} onChange={e=>updRemise(t,e.target.value)} className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"/><span className="text-xs text-gray-400">%</span></div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-6 flex-wrap">
+              <div><label className="text-xs text-gray-500 block mb-1">Coût horaire de l'extra (Option 2, €/h)</label>
+                <input type="number" min="0" step="0.5" value={coutExtraAdmin} onChange={e=>updCoutExtra(e.target.value)} className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+              </div>
+              <div><label className="text-xs text-gray-500 block mb-1">Délai avant refus auto. d'un devis sans changement (jours)</label>
+                <input type="number" min="1" value={delaiAdmin} onChange={e=>updDelaiAdmin(e.target.value)} className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+              </div>
+            </div>
+          </div>
+
+          {/* Privatisation — Catalogue de services par café */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <h3 className="font-semibold text-gray-800 mb-1">🎉 Privatisation — Catalogue de services</h3>
+            <p className="text-xs text-gray-500 mb-3">Liste des prestations et consommations proposées dans le devis, par café.</p>
+            <select value={cafeServicesSel} onChange={e=>setCafeServicesSel(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3"><option value="">— Choisir un café —</option>{cafes.map(c=><option key={c} value={c}>{c}</option>)}</select>
+            {cafeServicesSel && <>
+              <div className="space-y-1.5 mb-3 max-h-72 overflow-y-auto">
+                {servicesAdmin.map(s=>(
+                  <div key={s.id} className="flex items-center gap-2 text-xs border border-gray-50 rounded-lg px-2 py-1.5">
+                    <span className="text-gray-400 w-40 truncate">{s.groupe}</span>
+                    <span className="flex-1">{s.label}</span>
+                    <span className="text-gray-500 w-16">{s.unite}</span>
+                    <span className="font-semibold text-violet-700 w-16 text-right">{s.tarif.toFixed(2)}€</span>
+                    {s.type==="conso" && <button onClick={()=>delServiceAdmin(s.id)} className="text-rose-400 hover:text-rose-600">✕</button>}
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2 flex-wrap items-end border-t border-gray-100 pt-3">
+                <input placeholder="Nouvelle consommation…" value={newServiceForm.label} onChange={e=>setNewServiceForm(f=>({...f,label:e.target.value}))} className="flex-1 min-w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+                <input placeholder="unité" value={newServiceForm.unite} onChange={e=>setNewServiceForm(f=>({...f,unite:e.target.value}))} className="w-20 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
+                <input type="number" placeholder="Tarif €" value={newServiceForm.tarif} onChange={e=>setNewServiceForm(f=>({...f,tarif:e.target.value}))} className="w-24 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
+                <button onClick={addServiceAdmin} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Ajouter</button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">Seules les lignes de la catégorie "Consommations" peuvent être ajoutées/supprimées ici. Les Options 1/2 et leurs composantes sont fixes.</p>
+            </>}
           </div>
 
           {/* Réseaux adhérents (v4.0.0) */}
@@ -1522,33 +1630,415 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     const SectionPrivatisation = ({ cafe, refreshTick=0 }) => {
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
-      const [f,setF]=useState({date_evenement:"",client:"",montant_devis:"",devis_accepte:"OUI",montant_facture:"",date_reglement:"",mode:"Chèque"});
-      useEffect(()=>{loadData(cafe,"privatisation").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
-      const submit=async()=>{ if(!f.client)return; const nr={id:Date.now(),...f,semaine:getWeekForDate(f.date_evenement),mois:getMonthForDate(f.date_evenement),montant_devis:parseFloat(f.montant_devis)||0,montant_facture:parseFloat(f.montant_facture)||0,recorded_at:localDateTime()}; const upd=[nr,...rows]; setRows(upd); await saveData(cafe,"privatisation",upd); setF({date_evenement:"",client:"",montant_devis:"",devis_accepte:"OUI",montant_facture:"",date_reglement:"",mode:"Chèque"}); };
-      const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"privatisation",u); };
+      const [services,setServices]=useState([]);
+      const [entetes,setEntetes]=useState({});
+      const [coutExtra,setCoutExtra]=useState(COUT_EXTRA_DEFAULT);
+      const [remises,setRemises]=useState(REMISE_DEFAULT);
+      const [editId,setEditId]=useState(null);
+      const [showForm,setShowForm]=useState(false);
+      const [f,setF]=useState(()=>mkDevisForm(cafe));
+      const [printDoc,setPrintDoc]=useState(null); // {type:"devis"|"facture", devis}
+      const [decisionId,setDecisionId]=useState(null); // devis en cours de décision (validé/refusé)
+      const [decisionDate,setDecisionDate]=useState(new Date().toISOString().slice(0,10));
+      const [decisionType,setDecisionType]=useState("validé");
+      const [paiementId,setPaiementId]=useState(null); // devis en cours de passage "payé"
+      const [paiementForm,setPaiementForm]=useState(null); // {lignes_finales, mode, date_reglement}
+
+      useEffect(()=>{
+        setLoading(true);
+        Promise.all([loadData(cafe,"privatisation"), loadServicesPrivat(cafe), loadEntetesPrivat(), loadCoutExtra(), loadRemises(), loadDelaiAutoRefus()])
+          .then(async ([d, svc, ent, extra, rem, delai])=>{
+            // Bascule automatique en "refusé" des devis "créé" sans changement depuis plus de `delai` jours
+            const now = Date.now();
+            const seuilMs = (delai||30) * 24 * 60 * 60 * 1000;
+            let changed = false;
+            const dRows = (d||[]).map(r => {
+              if (r.statut !== "créé") return r;
+              const ref = r.last_modified_at || r.recorded_at;
+              const refMs = ref ? new Date(ref.includes("T") ? ref : ref.replace(" ","T")).getTime() : 0;
+              if (refMs && (now - refMs) > seuilMs) { changed = true; return {...r, statut:"refusé", date_decision: new Date().toISOString().slice(0,10), last_modified_at: new Date().toISOString()}; }
+              return r;
+            });
+            setRows(dRows); setServices(svc); setEntetes(ent); setCoutExtra(extra); setRemises(rem);
+            setLoading(false);
+            if (changed) await saveData(cafe,"privatisation",dRows);
+          });
+      },[cafe,refreshTick]);
+
+      const entete = entetes[cafe] || {adresse:"",surface:"",jauge:"",siret:"",iban:""};
+
+      const newDevis = () => {
+        const base = mkDevisForm(cafe);
+        base.adresse_cafe = entete.adresse; base.surface_cafe = entete.surface; base.siret_cafe = entete.siret; base.iban_cafe = entete.iban;
+        setF(base); setEditId(null); setShowForm(true);
+      };
+      const editDevis = (r) => { setF(r); setEditId(r.id); setShowForm(true); };
+
+      const totaux = calcDevisTotaux(f.lignes, services, f.option_choisie, coutExtra, remises[f.type_client]||0);
+
+      const toggleLigne = (svcId, qteInitiale=1) => {
+        setF(x=>{
+          const exists = x.lignes.find(l=>l.id===svcId);
+          if (exists) return {...x, lignes: x.lignes.filter(l=>l.id!==svcId)};
+          return {...x, lignes: [...x.lignes, {id:svcId, qte:qteInitiale}]};
+        });
+      };
+      const updQte = (svcId, qte) => setF(x=>({...x, lignes: x.lignes.map(l=>l.id===svcId?{...l,qte}:l)}));
+
+      const saveDevis = async () => {
+        if (!f.nom.trim() && !f.nom_entreprise.trim()) { alert("Le nom du client (ou de l'entreprise) est obligatoire."); return; }
+        if (!f.date_evenement) { alert("La date de l'événement est obligatoire."); return; }
+        if (f.telephone.trim() && !isValidTelFR(f.telephone)) { if(!window.confirm(`Le numéro "${f.telephone}" ne ressemble pas à un numéro français. Confirmez-vous cette saisie ?`)) return; }
+        if (f.mail && !isValidEmail(f.mail)) { alert("L'adresse mail n'est pas valide."); return; }
+        if (f.lignes.filter(l=>{const svc=services.find(s=>s.id===l.id); return svc&&(svc.type==="option1"||svc.type==="option2");}).length === 0) {
+          alert("Une option de privatisation (Option 1 ou Option 2) est obligatoire."); return;
+        }
+        const clientLabel = f.structure ? (f.nom_entreprise||f.contact_nom) : `${f.prenom} ${f.nom}`.trim();
+        const nr = {
+          ...f,
+          id: f.id || Date.now(),
+          semaine: getWeekForDate(f.date_evenement),
+          mois: getMonthForDate(f.date_evenement),
+          montant_devis: totaux.total,
+          client: clientLabel,
+          recorded_at: localDateTime(),
+          last_modified_at: new Date().toISOString(),
+        };
+        const upd = f.id ? rows.map(r=>r.id===f.id?nr:r) : [nr, ...rows];
+        setRows(upd); await saveData(cafe,"privatisation",upd);
+        setShowForm(false); setEditId(null);
+        setPrintDoc({type:"devis", devis:nr});
+      };
+
+      const del = async(id) => { setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"privatisation",u); };
+
+      const applyDecision = async () => {
+        if (!decisionDate) { alert("La date de décision est obligatoire."); return; }
+        const upd = rows.map(r=>r.id===decisionId ? {...r, statut: decisionType, date_decision: decisionDate, last_modified_at: new Date().toISOString()} : r);
+        setRows(upd); await saveData(cafe,"privatisation",upd);
+        setDecisionId(null);
+      };
+
+      const openPaiement = (r) => {
+        setPaiementId(r.id);
+        setPaiementForm({
+          lignes_finales: r.lignes.map(l=>({...l})),
+          mode: "Chèque",
+          date_reglement: new Date().toISOString().slice(0,10),
+        });
+      };
+      const updQteFinale = (svcId, qte) => setPaiementForm(pf=>({...pf, lignes_finales: pf.lignes_finales.map(l=>l.id===svcId?{...l,qte}:l)}));
+
+      const totauxFinaux = paiementForm ? (()=>{ const r = rows.find(x=>x.id===paiementId); return r ? calcDevisTotaux(paiementForm.lignes_finales, services, r.option_choisie, coutExtra, remises[r.type_client]||0) : {total:0}; })() : {total:0};
+
+      const confirmPaiement = async () => {
+        const r = rows.find(x=>x.id===paiementId);
+        if (!r) return;
+        if (!paiementForm.mode) { alert("Le moyen de paiement est obligatoire."); return; }
+        const montantFinal = Math.max(totauxFinaux.total, r.montant_devis);
+        // Une fois payé, la privatisation est comptabilisée sur la semaine de la date de PAIEMENT
+        const nr = {
+          ...r,
+          statut:"payé",
+          lignes_finales: paiementForm.lignes_finales,
+          montant_facture: montantFinal,
+          mode: paiementForm.mode,
+          date_reglement: paiementForm.date_reglement,
+          semaine: getWeekForDate(paiementForm.date_reglement),
+          mois: getMonthForDate(paiementForm.date_reglement),
+          last_modified_at: new Date().toISOString(),
+        };
+        const upd = rows.map(x=>x.id===paiementId?nr:x);
+        setRows(upd); await saveData(cafe,"privatisation",upd);
+        setPaiementId(null); setPaiementForm(null);
+        setPrintDoc({type:"facture", devis:nr});
+      };
+
+      const statutBadge = (s) => {
+        const colors = {"créé":"sky","validé":"emerald","refusé":"rose","payé":"violet"};
+        return <Badge color={colors[s]||"sky"}>{s}</Badge>;
+      };
+
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
-      return (
-        <div className="space-y-6">
-          {confirmId&&<ConfirmDialog msg="Confirmez-vous vouloir supprimer cette ligne ?" onOui={()=>del(confirmId)} onNon={()=>setConfirmId(null)}/>}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-            <h3 className="font-semibold text-gray-800 mb-4">🎉 Nouvelle privatisation</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <div><label className="text-xs text-gray-500 block mb-1">Date événement</label><input type="date" value={f.date_evenement} onChange={e=>setF(x=>({...x,date_evenement:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
-              <div><label className="text-xs text-gray-500 block mb-1">Client</label><input type="text" value={f.client} onChange={e=>setF(x=>({...x,client:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
-              <div><label className="text-xs text-gray-500 block mb-1">Montant HT devis (€)</label><input type="number" step="0.01" value={f.montant_devis} onChange={e=>setF(x=>({...x,montant_devis:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
-              <div><label className="text-xs text-gray-500 block mb-1">Devis accepté</label><select value={f.devis_accepte} onChange={e=>setF(x=>({...x,devis_accepte:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"><option>OUI</option><option>NON</option><option>EN ATTENTE</option></select></div>
-              <div><label className="text-xs text-gray-500 block mb-1">Montant facturé (€)</label><input type="number" step="0.01" value={f.montant_facture} onChange={e=>setF(x=>({...x,montant_facture:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
-              <div><label className="text-xs text-gray-500 block mb-1">Date règlement</label><input type="date" value={f.date_reglement} onChange={e=>setF(x=>({...x,date_reglement:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
+
+      // ── Impression devis / facture ──
+      if (printDoc) {
+        const d = printDoc.devis;
+        const lignesAffichees = printDoc.type==="facture" ? (d.lignes_finales||d.lignes) : d.lignes;
+        const totauxDoc = calcDevisTotaux(lignesAffichees, services, d.option_choisie, coutExtra, remises[d.type_client]||0);
+        const montantDoc = printDoc.type==="facture" ? d.montant_facture : d.montant_devis;
+        const isFacture = printDoc.type==="facture";
+        const recalculInferieur = isFacture && totauxDoc.total < d.montant_devis;
+        return (
+          <div className="space-y-4">
+            <div className="flex gap-2 print:hidden">
+              <button onClick={()=>window.print()} className="bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">🖨️ Imprimer / Enregistrer en PDF</button>
+              <button onClick={()=>setPrintDoc(null)} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors border border-gray-200">← Retour</button>
             </div>
-            <div className="flex items-end justify-between mt-4 gap-4">
-              <div className="text-sm text-gray-500">Facturé : <strong className="text-violet-600">{f.montant_facture?parseFloat(f.montant_facture).toFixed(2):"0.00"} €</strong> — <Badge color="violet">{getWeekForDate(f.date_evenement)}</Badge></div>
-              <div className="flex items-end gap-3">
-                <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label><select value={f.mode} onChange={e=>setF(x=>({...x,mode:e.target.value}))} className="border-2 border-violet-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 bg-violet-50">{MODES.map(m=><option key={m}>{m}</option>)}</select></div>
-                <button onClick={submit} className="bg-violet-500 hover:bg-violet-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
+            <div id="daddy-print-area" className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 max-w-3xl mx-auto print:shadow-none print:border-0 print:p-2 text-sm" style={{fontSize:"0.85rem"}}>
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h1 className="text-xl font-bold text-gray-800">{isFacture?"FACTURE":"DEVIS"}</h1>
+                  <p className="text-xs text-gray-500">Café Chez Daddy — {cafe}</p>
+                  {!isFacture && <p className="text-xs text-gray-500">Date du devis : <strong>{d.date_devis||d.recorded_at?.slice(0,10)}</strong></p>}
+                </div>
+                <div className="text-right text-xs text-gray-500">
+                  <p>{d.adresse_cafe}</p>
+                  <p>SIRET : {d.siret_cafe}</p>
+                  {d.iban_cafe && <p>IBAN : {d.iban_cafe}</p>}
+                </div>
               </div>
+              <div className="grid grid-cols-2 gap-4 mb-4 text-xs">
+                <div>
+                  <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Client</p>
+                  {d.structure ? <>
+                    <p className="font-medium">{d.nom_entreprise}</p>
+                    <p>Contact : {d.contact_nom}</p>
+                    <p>SIRET : {d.siret_client}</p>
+                  </> : <p className="font-medium">{d.prenom} {d.nom}</p>}
+                  <p>{d.adresse}</p>
+                  <p>{d.telephone}{d.mail?` · ${d.mail}`:""}</p>
+                  <p className="text-xs text-gray-400 mt-1">Type : {d.type_client}</p>
+                </div>
+                <div className="text-right">
+                  <p>Date événement : <strong>{d.date_evenement}</strong></p>
+                  <p>Nb convives : <strong>{d.nb_convives||"—"}</strong></p>
+                  {isFacture && <>
+                    <p>Date règlement : <strong>{d.date_reglement}</strong></p>
+                    <p>Mode : <strong>{d.mode}</strong></p>
+                  </>}
+                </div>
+              </div>
+              <table className="w-full text-xs mb-3">
+                <thead><tr className="border-b-2 border-gray-200"><th className="text-left py-1">Désignation</th><th className="text-right py-1">Qté</th><th className="text-right py-1">PU</th><th className="text-right py-1">Total</th></tr></thead>
+                <tbody>
+                  {lignesAffichees.filter(l=>l.qte>0).map(l=>{ const svc=services.find(s=>s.id===l.id); if(!svc) return null; return (
+                    <tr key={l.id} className="border-b border-gray-50"><td className="py-1">{svc.label}</td><td className="text-right py-1">{l.qte} {svc.unite}</td><td className="text-right py-1">{svc.tarif.toFixed(2)}€</td><td className="text-right py-1">{(svc.tarif*l.qte).toFixed(2)}€</td></tr>
+                  );})}
+                </tbody>
+              </table>
+              <div className="flex justify-end mb-2">
+                <table className="text-xs w-64">
+                  <tbody>
+                    <tr><td className="py-0.5 text-gray-500">Privatisation</td><td className="text-right py-0.5">{totauxDoc.montantPrivat.toFixed(2)}€</td></tr>
+                    <tr><td className="py-0.5 text-gray-500">Consommations</td><td className="text-right py-0.5">{totauxDoc.montantConso.toFixed(2)}€</td></tr>
+                    <tr><td className="py-0.5 text-gray-500">Remise ({remises[d.type_client]||0}%, applicable sur la privatisation des locaux)</td><td className="text-right py-0.5 text-rose-600">-{totauxDoc.remise.toFixed(2)}€</td></tr>
+                    {isFacture && <tr><td className="py-0.5 text-gray-500">Montant du devis validé</td><td className="text-right py-0.5">{d.montant_devis.toFixed(2)}€</td></tr>}
+                    <tr className="border-t-2 border-gray-200"><td className="py-1 font-bold">TOTAL</td><td className="text-right py-1 font-bold text-base">{(montantDoc||totauxDoc.total).toFixed(2)}€</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              {!isFacture && <p className="text-xs text-gray-500 italic mb-1">Ce montant constitue le montant minimum facturable lors de la prestation.</p>}
+              {!isFacture && <p className="text-xs text-gray-500 italic">Le présent devis est valable 30 jours à compter de sa date d'émission.</p>}
+              {isFacture && recalculInferieur && <p className="text-xs text-amber-600 italic mt-1">Le montant recalculé est inférieur au montant du devis : le montant du devis s'applique.</p>}
             </div>
           </div>
-          <TableWrapper headers={["Date evt","Client","Devis HT","Accepté","Facturé","Date règl.","Mode","Suppr."]} rows={rows.map(r=>[r.date_evenement,r.client,`${r.montant_devis}€`,r.devis_accepte==="OUI"?"✅":r.devis_accepte,<strong>{r.montant_facture?.toFixed(2)}€</strong>,r.date_reglement,<Badge color="violet">{r.mode}</Badge>,<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
+        );
+      }
+
+      // ── Modale décision (validé/refusé) ──
+      const decisionModal = decisionId && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full space-y-4">
+            <h3 className="font-semibold text-gray-800">Décision du client</h3>
+            <div><label className="text-xs text-gray-500 block mb-1">Statut</label>
+              <select value={decisionType} onChange={e=>setDecisionType(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"><option value="validé">Validé</option><option value="refusé">Refusé</option></select>
+            </div>
+            <div><label className="text-xs text-gray-500 block mb-1">Date de décision *</label>
+              <input type="date" value={decisionDate} onChange={e=>setDecisionDate(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={()=>setDecisionId(null)} className="text-sm text-gray-500 px-4 py-2">Annuler</button>
+              <button onClick={applyDecision} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Confirmer</button>
+            </div>
+          </div>
+        </div>
+      );
+
+      // ── Modale paiement (passage en "payé") ──
+      const paiementModal = paiementId && paiementForm && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full space-y-4 my-8">
+            <h3 className="font-semibold text-gray-800">Finaliser le paiement</h3>
+            <p className="text-xs text-gray-500">Ajustez les quantités finales si elles diffèrent du devis.</p>
+            <div className="max-h-64 overflow-y-auto space-y-1.5">
+              {paiementForm.lignes_finales.map(l=>{ const svc=services.find(s=>s.id===l.id); if(!svc) return null; return (
+                <div key={l.id} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1">{svc.label}</span>
+                  <input type="number" min="0" value={l.qte} onChange={e=>updQteFinale(l.id, parseFloat(e.target.value)||0)} className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm"/>
+                  <span className="text-gray-400 w-10">{svc.unite}</span>
+                </div>
+              );})}
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-sm flex justify-between"><span>Montant recalculé</span><strong>{totauxFinaux.total.toFixed(2)}€</strong></div>
+            <p className="text-xs text-gray-400">Le montant facturé ne peut pas être inférieur au montant du devis ({rows.find(x=>x.id===paiementId)?.montant_devis.toFixed(2)}€).</p>
+            <div><label className="text-xs text-gray-500 block mb-1">Moyen de paiement *</label>
+              <select value={paiementForm.mode} onChange={e=>setPaiementForm(pf=>({...pf,mode:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{MODES_PRIVAT.map(m=><option key={m}>{m}</option>)}</select>
+            </div>
+            <div><label className="text-xs text-gray-500 block mb-1">Date de paiement *</label>
+              <input type="date" value={paiementForm.date_reglement} onChange={e=>setPaiementForm(pf=>({...pf,date_reglement:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={()=>{setPaiementId(null);setPaiementForm(null);}} className="text-sm text-gray-500 px-4 py-2">Annuler</button>
+              <button onClick={confirmPaiement} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">✅ Enregistrer et imprimer la facture</button>
+            </div>
+          </div>
+        </div>
+      );
+
+      // ── Formulaire de création/édition de devis ──
+      if (showForm) {
+        const groupes = [...new Set(services.map(s=>s.groupe))];
+        return (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-gray-800">{editId?"✏️ Modifier le devis":"🎉 Créer un devis"}</h3>
+              <button onClick={()=>setShowForm(false)} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-2 rounded-xl text-sm font-semibold transition-colors border border-gray-200">← Annuler</button>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+              <h4 className="font-semibold text-gray-700 text-sm mb-3">1. En-tête devis</h4>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Votre contact (50 car.)</label><input maxLength={50} value={f.contact_cafe} onChange={e=>setF(x=>({...x,contact_cafe:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Adresse</label><input value={f.adresse_cafe} onChange={e=>setF(x=>({...x,adresse_cafe:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">SIRET</label><input value={f.siret_cafe} onChange={e=>setF(x=>({...x,siret_cafe:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">IBAN</label><input value={f.iban_cafe} onChange={e=>setF(x=>({...x,iban_cafe:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+              <h4 className="font-semibold text-gray-700 text-sm mb-3">2. Client</h4>
+              <label className="flex items-center gap-2 text-sm mb-3 cursor-pointer"><input type="checkbox" checked={f.structure} onChange={e=>{ const struct=e.target.checked; setF(x=>({...x,structure:struct, type_client: TYPE_CLIENT_STRUCTURE[x.type_client]===struct?x.type_client:(struct?"Entreprise":"Particulier") })); }} className="w-4 h-4 accent-violet-500"/>Structure (entreprise / association)</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {!f.structure ? <>
+                  <div><label className="text-xs text-gray-500 block mb-1">Prénom *</label><input value={f.prenom} onChange={e=>setF(x=>({...x,prenom:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                  <div><label className="text-xs text-gray-500 block mb-1">NOM *</label><input value={f.nom} onChange={e=>setF(x=>({...x,nom:e.target.value.toUpperCase()}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm uppercase"/></div>
+                </> : <>
+                  <div><label className="text-xs text-gray-500 block mb-1">Nom du contact *</label><input value={f.contact_nom} onChange={e=>setF(x=>({...x,contact_nom:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                  <div><label className="text-xs text-gray-500 block mb-1">Nom de l'entreprise *</label><input value={f.nom_entreprise} onChange={e=>setF(x=>({...x,nom_entreprise:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                  <div><label className="text-xs text-gray-500 block mb-1">SIRET *</label><input value={f.siret_client} onChange={e=>setF(x=>({...x,siret_client:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                </>}
+                <div><label className="text-xs text-gray-500 block mb-1">Adresse *</label><input value={f.adresse} onChange={e=>setF(x=>({...x,adresse:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Téléphone *</label>
+                  <input value={f.telephone} onChange={e=>setF(x=>({...x,telephone:e.target.value}))} placeholder="06 12 34 56 78" className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${!isValidTelFR(f.telephone)?"border-amber-300 focus:ring-amber-300":"border-gray-200 focus:ring-violet-300"}`}/>
+                  {!isValidTelFR(f.telephone) && <p className="text-xs text-amber-600 mt-0.5">⚠️ Format non français — vérifiez la saisie</p>}
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Mail *</label>
+                  <input value={f.mail||""} onChange={e=>setF(x=>({...x,mail:e.target.value}))} className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${(f.mail&&!isValidEmail(f.mail))?"border-rose-300 focus:ring-rose-300":"border-gray-200 focus:ring-violet-300"}`}/>
+                  {f.mail&&!isValidEmail(f.mail) && <p className="text-xs text-rose-500 mt-0.5">Format mail invalide</p>}
+                </div>
+                <div><label className="text-xs text-gray-500 block mb-1">Nb de convives</label><input type="number" max="99" value={f.nb_convives} onChange={e=>setF(x=>({...x,nb_convives:e.target.value.slice(0,2)}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Date de l'événement *</label><input type="date" value={f.date_evenement} onChange={e=>setF(x=>({...x,date_evenement:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Type de client *</label>
+                  <select value={f.type_client} onChange={e=>setF(x=>({...x,type_client:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    {TYPES_CLIENT.filter(t=>TYPE_CLIENT_STRUCTURE[t]===f.structure).map(t=><option key={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+              <h4 className="font-semibold text-gray-700 text-sm mb-3">3. Services</h4>
+              {groupes.map(g=>{
+                const isOpt1Groupe = g.startsWith("Option 1");
+                const isOpt2Groupe = g.startsWith("Option 2");
+                // Exclusivité au niveau du GROUPE entier : si une ligne d'Option 1 est cochée, tout le groupe Option 2 est désactivé (et inversement)
+                const groupeOpt1Coche = f.lignes.some(l=>{const sv=services.find(x=>x.id===l.id); return sv&&sv.groupe.startsWith("Option 1");});
+                const groupeOpt2Coche = f.lignes.some(l=>{const sv=services.find(x=>x.id===l.id); return sv&&sv.groupe.startsWith("Option 2");});
+                const groupeDisabled = (isOpt1Groupe && groupeOpt2Coche) || (isOpt2Groupe && groupeOpt1Coche);
+                return (
+                <div key={g} className="mb-4">
+                  <p className="text-xs font-semibold text-violet-700 uppercase mb-2">{g}</p>
+                  <div className="space-y-1.5">
+                    {services.filter(s=>s.groupe===g).map(s=>{
+                      const ligne = f.lignes.find(l=>l.id===s.id);
+                      const disabledOpt = (isOpt1Groupe||isOpt2Groupe) && groupeDisabled;
+                      return (
+                        <div key={s.id} className="flex items-center gap-2 text-sm">
+                          <input type="checkbox" checked={!!ligne} disabled={!!disabledOpt} onChange={()=>{
+                            const willCheck = !ligne;
+                            let qteInit = 1;
+                            // Auto-quantité : "1 conso. par convive" reprend directement le nb de convives saisi
+                            if (willCheck && s.id==="conso_convive" && f.nb_convives) qteInit = parseFloat(f.nb_convives)||1;
+                            // Auto-quantité : "2ème personnel" reprend le nb d'heures déjà saisi sur la privatisation Option 2
+                            if (willCheck && s.id==="personnel2") { const ligneOpt2 = f.lignes.find(l=>l.id==="opt2"); if (ligneOpt2) qteInit = ligneOpt2.qte; }
+                            toggleLigne(s.id, qteInit);
+                            if (willCheck && isOpt1Groupe) setF(x=>({...x,option_choisie:"option1"}));
+                            if (willCheck && isOpt2Groupe) setF(x=>({...x,option_choisie:"option2"}));
+                          }} className="w-4 h-4 accent-violet-500"/>
+                          <span className="flex-1">{s.label} <span className="text-gray-400">({s.tarif.toFixed(2)}€/{s.unite})</span></span>
+                          {ligne && <div className="flex items-center gap-1.5">
+                            <input type="number" min="0" value={ligne.qte} onChange={e=>updQte(s.id, parseFloat(e.target.value)||0)} className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm"/>
+                            <span className="text-xs text-gray-400 w-10">{s.unite}</span>
+                          </div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                );
+              })}
+              <p className="text-xs text-amber-600">⚠️ Option 1 ou Option 2 : une seule des deux est sélectionnable, l'une est obligatoire.</p>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+              <h4 className="font-semibold text-gray-700 text-sm mb-3">4. Récapitulatif</h4>
+              <table className="w-full text-sm">
+                <tbody>
+                  <tr><td className="py-1 text-gray-500">Privatisation</td><td className="text-right py-1">{totaux.montantPrivat.toFixed(2)}€</td></tr>
+                  <tr><td className="py-1 text-gray-500">Consommations</td><td className="text-right py-1">{totaux.montantConso.toFixed(2)}€</td></tr>
+                  <tr><td className="py-1 text-gray-500">Remise ({remises[f.type_client]||0}%, applicable sur la privatisation des locaux — {f.type_client})</td><td className="text-right py-1 text-rose-600">-{totaux.remise.toFixed(2)}€</td></tr>
+                  <tr className="border-t-2 border-gray-100"><td className="py-2 font-bold">TOTAL</td><td className="text-right py-2 font-bold text-lg text-violet-700">{totaux.total.toFixed(2)}€</td></tr>
+                </tbody>
+              </table>
+              <button onClick={saveDevis} className="mt-4 bg-violet-600 hover:bg-violet-700 text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors">✅ Enregistrer et imprimer le devis</button>
+            </div>
+          </div>
+        );
+      }
+
+      // ── Liste des devis (vue par défaut) ──
+      return (
+        <div className="space-y-6">
+          {confirmId&&<ConfirmDialog msg="Confirmez-vous vouloir supprimer ce devis ?" onOui={()=>del(confirmId)} onNon={()=>setConfirmId(null)}/>}
+          {decisionModal}
+          {paiementModal}
+          <div className="flex justify-between items-center">
+            <h3 className="font-semibold text-gray-800">🎉 Privatisations — {rows.length} devis</h3>
+            <button onClick={newDevis} className="bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">+ Créer devis</button>
+          </div>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="bg-gray-50">{["Date évt","Client","Type","Montant devis","Statut","Montant facturé","Mode","Date règl.","Actions"].map(h=><th key={h} className="text-left px-3 py-2 text-gray-500 uppercase tracking-wide font-semibold">{h}</th>)}</tr></thead>
+                <tbody>
+                  {rows.map(r=>(
+                    <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50">
+                      <td className="px-3 py-2">{r.date_evenement}</td>
+                      <td className="px-3 py-2 font-medium">{r.client}</td>
+                      <td className="px-3 py-2">{r.type_client}</td>
+                      <td className="px-3 py-2">{r.montant_devis?.toFixed(2)}€</td>
+                      <td className="px-3 py-2">{statutBadge(r.statut)}</td>
+                      <td className="px-3 py-2 font-semibold text-violet-700">{r.statut==="payé"?`${r.montant_facture?.toFixed(2)}€`:"—"}</td>
+                      <td className="px-3 py-2">{r.mode||"—"}</td>
+                      <td className="px-3 py-2">{r.date_reglement||"—"}</td>
+                      <td className="px-3 py-2 flex gap-1.5 flex-wrap">
+                        {r.statut==="créé" && <button onClick={()=>editDevis(r)} className="text-indigo-500 hover:text-indigo-700" title="Modifier">✏️</button>}
+                        {r.statut==="créé" && <button onClick={()=>{setDecisionId(r.id);setDecisionType("validé");setDecisionDate(new Date().toISOString().slice(0,10));}} className="text-emerald-600 hover:text-emerald-800 text-xs font-semibold">Décision</button>}
+                        {r.statut==="validé" && <button onClick={()=>openPaiement(r)} className="text-violet-600 hover:text-violet-800 text-xs font-semibold">💰 Payer</button>}
+                        {(r.statut==="créé") && <button onClick={()=>setPrintDoc({type:"devis",devis:r})} className="text-gray-400 hover:text-gray-600" title="Imprimer devis">🖨️</button>}
+                        {r.statut==="payé" && <button onClick={()=>setPrintDoc({type:"facture",devis:r})} className="text-gray-400 hover:text-gray-600" title="Imprimer facture">🖨️</button>}
+                        <button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600">✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {rows.length===0 && <tr><td colSpan={9} className="text-center py-6 text-gray-400">Aucun devis pour le moment.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       );
     };
@@ -2130,6 +2620,134 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     // Réseaux configurables (Admin) — stockés dans Supabase (cafe="_config", section="reseaux")
     const loadReseaux = async () => { const r = await loadData("_config","reseaux"); return r||[]; };
     const saveReseaux = async (arr) => { await saveData("_config","reseaux",arr); };
+
+    // ══════════════════ PRIVATISATION v4.1.0 — Cycle Devis → Facture ══════════════════
+    const TYPES_CLIENT = ["Adhérent / Habitant","Association partenaire","Particulier","Association non-partenaire","Entreprise"];
+    // Cohérence Structure ↔ Type de client (true = ce type nécessite "Structure" coché)
+    const TYPE_CLIENT_STRUCTURE = {
+      "Adhérent / Habitant": false,
+      "Association partenaire": true,
+      "Particulier": false,
+      "Association non-partenaire": true,
+      "Entreprise": true,
+    };
+    const REMISE_DEFAULT = { "Adhérent / Habitant":50, "Association partenaire":20, "Particulier":10, "Association non-partenaire":10, "Entreprise":0 };
+    const MODES_PRIVAT = ["CB","Espèces","Chèque","Virement"];
+    const STATUTS_DEVIS = ["créé","validé","refusé","payé"];
+
+    // En-têtes café — paramètres Admin (cafe="_config", section="entetes_privatisation")
+    const ENTETES_PRIVAT_DEFAULT = {
+      "Croix-Rousse":        { adresse:"28 rue de Cuire, 69004 Lyon", surface:"69 m²", jauge:"", siret:"84 992 258 800 033", iban:"FR76 3000 3022 8000 0372 6934 378" },
+      "Caluire":             { adresse:"1 place Louis Braille, 69300 Caluire", surface:"90 m²", jauge:"50", siret:"84 992 258 800 033", iban:"FR76 3000 3022 8000 0372 6759 487" },
+      "Ste Foy lès Lyon":    { adresse:"78 chemin de Montray, 69110 Sainte Foy lès Lyon", surface:"80 m² / 36m²", jauge:"40", siret:"84 992 258 800 033", iban:"FR76 3000 3022 8000 0372 6821 276" },
+      "Autun":               { adresse:"3 rue de l'Arquebuse, 71400 Autun", surface:"90 m²", jauge:"", siret:"84 992 258 800 033", iban:"FR76 3000 3022 8000 0372 6419 502" },
+      "La Madeleine":        { adresse:"90 rue Paul Doumer, 59110 La Madeleine", surface:"77 m²", jauge:"", siret:"44 031 343 500 016", iban:"FR76 3002 7170 4000 0214 1180 173" },
+      "Douai":               { adresse:"16 rue Saint Jean, 59500 Douai", surface:"", jauge:"", siret:"84 992 258 800 033", iban:"" },
+      "Clermont-Ferrand":    { adresse:"", surface:"", jauge:"", siret:"84 992 258 800 033", iban:"" },
+    };
+    const loadEntetesPrivat = async () => { const r = await loadData("_config","entetes_privatisation"); return (r&&Object.keys(r).length)?r:ENTETES_PRIVAT_DEFAULT; };
+    const saveEntetesPrivat = async (obj) => { await saveData("_config","entetes_privatisation",obj); };
+
+    // Coût horaire de l'extra (Option 2) — paramètre Admin (cafe="_config", section="cout_extra_privat")
+    const COUT_EXTRA_DEFAULT = 30;
+    const loadCoutExtra = async () => { const r = await loadData("_config","cout_extra_privat"); return (r&&r.length&&r[0]&&typeof r[0].valeur==="number") ? r[0].valeur : COUT_EXTRA_DEFAULT; };
+    const saveCoutExtra = async (val) => { await saveData("_config","cout_extra_privat",[{valeur:val}]); };
+
+    // Taux de remise par type de client — paramètre Admin (cafe="_config", section="remises_privatisation")
+    const loadRemises = async () => { const r = await loadData("_config","remises_privatisation"); return (r&&r.length&&r[0]&&typeof r[0]==="object") ? r[0] : REMISE_DEFAULT; };
+    const saveRemises = async (obj) => { await saveData("_config","remises_privatisation",[obj]); };
+
+    // Délai (en jours) avant qu'un devis "créé" sans changement passe automatiquement en "refusé"
+    const DELAI_AUTO_REFUS_DEFAULT = 30;
+    const loadDelaiAutoRefus = async () => { const r = await loadData("_config","delai_auto_refus_devis"); return (r&&r.length&&r[0]&&typeof r[0].valeur==="number") ? r[0].valeur : DELAI_AUTO_REFUS_DEFAULT; };
+    const saveDelaiAutoRefus = async (val) => { await saveData("_config","delai_auto_refus_devis",[{valeur:val}]); };
+
+    // Catalogue de services — par café (cafe=<nom café>, section="services_privatisation")
+    const SERVICES_PRIVAT_DEFAULT = [
+      {id:"opt1", groupe:"Option 1 : Privatisation simple des locaux", label:"Privatisation des locaux (écran, enceinte, kit karaoké)", unite:"h", tarif:30, type:"option1"},
+      {id:"droit_bouchon", groupe:"Option 1 : Privatisation simple des locaux", label:"Droit de bouchon", unite:"pers.", tarif:3, type:"normal"},
+      {id:"opt2", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"Privatisation des locaux + Équipe (1 pers.) + bar ouvert", unite:"h", tarif:60, type:"option2"},
+      {id:"personnel2", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"2ème personnel", unite:"h", tarif:30, type:"normal"},
+      {id:"conso_convive", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"1 conso. par convive", unite:"pers.", tarif:3, type:"normal"},
+      {id:"thermos", groupe:"Consommations", label:"Thermos café 20 tasses OU chocolat chaud 10 tasses OU thé 10 tasses", unite:"unité", tarif:20, type:"conso"},
+      {id:"jarre_the", groupe:"Consommations", label:"Jarre thé glacé OU citronnade OU Sirop 10L", unite:"unité", tarif:20, type:"conso"},
+      {id:"coca33", groupe:"Consommations", label:"Coca-Cola 33cL", unite:"unité", tarif:2, type:"conso"},
+      {id:"coca125", groupe:"Consommations", label:"Coca-Cola 1,25L", unite:"unité", tarif:3, type:"conso"},
+      {id:"perrier33", groupe:"Consommations", label:"Perrier 33cl", unite:"unité", tarif:2, type:"conso"},
+      {id:"perrier1l", groupe:"Consommations", label:"Perrier 1L", unite:"unité", tarif:3, type:"conso"},
+      {id:"limonade1l", groupe:"Consommations", label:"Limonade 1L", unite:"unité", tarif:3, type:"conso"},
+      {id:"jus_pomme", groupe:"Consommations", label:"Jus de pomme 1L", unite:"unité", tarif:3, type:"conso"},
+      {id:"cubi_rouge", groupe:"Consommations", label:"Cubi de vin rouge 10L", unite:"unité", tarif:50, type:"conso"},
+      {id:"cubi_blanc", groupe:"Consommations", label:"Cubi de vin blanc 10L", unite:"unité", tarif:50, type:"conso"},
+      {id:"cubi_rose", groupe:"Consommations", label:"Cubi de rosé 10L", unite:"unité", tarif:45, type:"conso"},
+      {id:"biere_blonde", groupe:"Consommations", label:"Bière blonde 75cL", unite:"unité", tarif:6, type:"conso"},
+      {id:"biere_ambree", groupe:"Consommations", label:"Bière ambrée 75cL", unite:"unité", tarif:6.5, type:"conso"},
+      {id:"cidre", groupe:"Consommations", label:"Cidre 75cL", unite:"unité", tarif:6, type:"conso"},
+      {id:"fut_biere", groupe:"Consommations", label:"Fût de bière", unite:"unité", tarif:110, type:"conso"},
+    ];
+    const loadServicesPrivat = async (cafe) => { const r = await loadData(cafe,"services_privatisation"); return (r&&r.length) ? r : SERVICES_PRIVAT_DEFAULT; };
+    const saveServicesPrivat = async (cafe, arr) => { await saveData(cafe,"services_privatisation",arr); };
+
+    // Calcul du prix total d'un devis : Privatisation (option1 ou option2 + extra), Consommations, Remise
+    // La remise ne s'applique QUE sur le montant "option1" — y compris dans l'option 2 où elle ne porte
+    // que sur la part équivalente à l'option 1 (le coût de l'extra n'est jamais remisé).
+    const calcDevisTotaux = (lignes, services, optionChoisie, coutExtra, tauxRemise) => {
+      let montantPrivat = 0, montantConso = 0;
+      lignes.forEach(l => {
+        const svc = services.find(s=>s.id===l.id);
+        if (!svc || !l.qte) return;
+        const montantLigne = (parseFloat(svc.tarif)||0) * (parseFloat(l.qte)||0);
+        // SEULES les lignes opt1/opt2 elles-mêmes ("Privatisation des locaux") entrent dans montantPrivat.
+        // Les services annexes du même groupe (2ème personnel, droit de bouchon, conso par convive…)
+        // sont des consommations/charges, jamais une base remisable.
+        if (svc.type==="option1" || svc.type==="option2") montantPrivat += montantLigne;
+        else montantConso += montantLigne;
+      });
+      // Base remisable : pour option1, c'est le montant_privat lui-même (tarif horaire pur) ;
+      // pour option2, c'est la part "équivalente option1" = montant_privat - (qte_option2 * coutExtra)
+      // Exemple : Option 2 à 60€/h sur 4h = 240€. coutExtra=30€/h → base = 240 - 4*30 = 120€.
+      let baseRemisable = montantPrivat;
+      if (optionChoisie === "option2") {
+        const ligneOpt2 = lignes.find(l=>{ const svc=services.find(s=>s.id===l.id); return svc && svc.type==="option2"; });
+        const qteOpt2 = ligneOpt2 ? (parseFloat(ligneOpt2.qte)||0) : 0;
+        baseRemisable = Math.max(0, montantPrivat - qteOpt2 * coutExtra);
+      }
+      const remise = baseRemisable * (parseFloat(tauxRemise)||0) / 100;
+      const total = montantPrivat + montantConso - remise;
+      return { montantPrivat, montantConso, baseRemisable, remise, total: Math.round(total*100)/100 };
+    };
+
+    const mkDevisForm = (cafe) => ({
+      id: null,
+      statut: "créé",
+      // En-tête (préremplie depuis entetes_privatisation, modifiable)
+      contact_cafe: "", adresse_cafe: "", surface_cafe: "", siret_cafe: "", iban_cafe: "",
+      // Client
+      structure: false,
+      prenom: "", nom: "",
+      contact_nom: "", nom_entreprise: "", siret_client: "",
+      adresse: "", telephone: "", mail: "",
+      nb_convives: "",
+      date_evenement: "",
+      date_devis: new Date().toISOString().slice(0,10),
+      type_client: "Adhérent / Habitant",
+      cafe: cafe,
+      // Services sélectionnés : [{id, qte}]
+      lignes: [],
+      option_choisie: "option1", // "option1" | "option2"
+      // Calculs figés au moment du devis (recalculés si modification)
+      montant_devis: 0,
+      // Décision client
+      date_decision: "",
+      // Facturation (une fois "payé")
+      lignes_finales: null, // copie de lignes avec quantités finales — null tant que non facturé
+      montant_facture: 0,
+      mode: "",
+      date_reglement: "",
+      // Champs hérités (compatibilité CSV)
+      client: "",
+      montant_devis_legacy: 0,
+    });
 
     const mkAdherentForm = () => ({
       id: null,
