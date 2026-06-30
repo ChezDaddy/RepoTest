@@ -2245,8 +2245,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                     blocs.forEach(b=>{
                       const totalM   = byMonthAdh(b.data, m=>m.length);
                       const nouveauxM = byMonthAdh(b.data, m=>m.filter(a=>!a.renouvellement).length);
-                      const montantM  = byMonthAdh(b.data, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
-                      const totTotal=totalM.reduce((a,c)=>a+c,0), totNouveaux=nouveauxM.reduce((a,c)=>a+c,0), totMontant=montantM.reduce((a,c)=>a+c,0);
+                      // Montant total CLASSIQUE : exclut les adhésions offertes
+                      const montantM  = byMonthAdh(b.data, m=>m.reduce((s,a)=>s+(a.adhesion_offerte?0:(parseFloat(a.montant)||0)),0));
+                      // Montant total INCLUANT les adhésions offertes
+                      const montantInclM = byMonthAdh(b.data, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                      const totTotal=totalM.reduce((a,c)=>a+c,0), totNouveaux=nouveauxM.reduce((a,c)=>a+c,0);
+                      const totMontant=montantM.reduce((a,c)=>a+c,0), totMontantIncl=montantInclM.reduce((a,c)=>a+c,0);
                       rows.push(<tr key={b.label+"_tot"} className="border-t-2 border-gray-100 hover:bg-gray-50">
                         <td className={`px-3 py-2 font-semibold ${b.color}`}>{b.label} — Nb total</td>
                         {totalM.map((v,i)=><td key={i} className={`px-2 py-2 text-right ${b.colorV}`}>{v||"—"}</td>)}
@@ -2257,13 +2261,19 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                         {nouveauxM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{v||"—"}</td>)}
                         <td className="px-3 py-2 text-right font-semibold text-gray-700">{totNouveaux}</td>
                       </tr>);
-                      rows.push(<tr key={b.label+"_mt"} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="px-3 py-2 text-gray-600">{b.label} — Montant (€)</td>
+                      rows.push(<tr key={b.label+"_mt"} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-600">{b.label} — Montant total (€)</td>
                         {montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
                         <td className="px-3 py-2 text-right font-semibold text-gray-700">{totMontant.toFixed(0)}€</td>
                       </tr>);
-                      const moyenneM = montantM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
-                      const moyenneTot = totTotal>0?totMontant/totTotal:0;
+                      rows.push(<tr key={b.label+"_mti"} className="border-b border-gray-100 hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-500">{b.label} — Montant total incl. offertes (€)</td>
+                        {montantInclM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-400">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
+                        <td className="px-3 py-2 text-right font-semibold text-gray-600">{totMontantIncl.toFixed(0)}€</td>
+                      </tr>);
+                      // Montant moyen = montant incluant offertes / nb total adhésions (inclut donc bien les offertes)
+                      const moyenneM = montantInclM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
+                      const moyenneTot = totTotal>0?totMontantIncl/totTotal:0;
                       rows.push(<tr key={b.label+"_avg"} className="border-b border-gray-100 hover:bg-gray-50 italic">
                         <td className="px-3 py-2 text-gray-400">{b.label} — Montant moyen (€)</td>
                         {moyenneM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-400">{v>0?`${v.toFixed(2)}€`:"—"}</td>)}
@@ -2273,7 +2283,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                     // Totaux combinés (individuelles + structures)
                     const totalAllM   = byMonthAdh(adherents, m=>m.length);
                     const nouveauxAllM = byMonthAdh(adherents, m=>m.filter(a=>!a.renouvellement).length);
-                    const montantAllM  = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                    const montantAllM  = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(a.adhesion_offerte?0:(parseFloat(a.montant)||0)),0));
+                    const montantAllInclM = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
                     rows.push(<tr key="tot_total" className="border-t-2 border-gray-200 bg-gray-50 hover:bg-gray-100">
                       <td className="px-3 py-2 font-bold text-gray-800">TOUS — Nb total adhérents</td>
                       {totalAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-800">{v||"—"}</td>)}
@@ -2289,9 +2300,14 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       {montantAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-800">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
                       <td className="px-3 py-2 text-right font-extrabold text-gray-900">{montantAllM.reduce((a,b)=>a+b,0).toFixed(0)}€</td>
                     </tr>);
-                    const moyenneAllM = montantAllM.map((v,i)=>totalAllM[i]>0?v/totalAllM[i]:0);
-                    const totAllTotal = totalAllM.reduce((a,b)=>a+b,0), totAllMontant = montantAllM.reduce((a,b)=>a+b,0);
-                    const moyenneAllTot = totAllTotal>0?totAllMontant/totAllTotal:0;
+                    rows.push(<tr key="tot_mti" className="bg-gray-50 hover:bg-gray-100">
+                      <td className="px-3 py-2 font-semibold text-gray-700">TOUS — Montant total incl. offertes (€)</td>
+                      {montantAllInclM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-700">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
+                      <td className="px-3 py-2 text-right font-bold text-gray-800">{montantAllInclM.reduce((a,b)=>a+b,0).toFixed(0)}€</td>
+                    </tr>);
+                    const moyenneAllM = montantAllInclM.map((v,i)=>totalAllM[i]>0?v/totalAllM[i]:0);
+                    const totAllTotal = totalAllM.reduce((a,b)=>a+b,0), totAllMontantIncl = montantAllInclM.reduce((a,b)=>a+b,0);
+                    const moyenneAllTot = totAllTotal>0?totAllMontantIncl/totAllTotal:0;
                     rows.push(<tr key="tot_avg" className="bg-gray-50 hover:bg-gray-100 italic">
                       <td className="px-3 py-2 font-medium text-gray-600">TOUS — Montant moyen (€)</td>
                       {moyenneAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{v>0?`${v.toFixed(2)}€`:"—"}</td>)}
@@ -2601,12 +2617,17 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   if (adhFilter==="struc") adherents = adherents.filter(a=>a.structure);
                   const totalM   = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).length);
                   const nouveauxM = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m && !a.renouvellement).length);
-                  const montantM  = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
-                  const totTotal = totalM.reduce((a,b)=>a+b,0), totNouveaux = nouveauxM.reduce((a,b)=>a+b,0), totMontant = montantM.reduce((a,b)=>a+b,0);
-                  const moyenneM = montantM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
-                  const moyenneTot = totTotal>0?totMontant/totTotal:0;
-                  return { cafe:c, totalM, nouveauxM, montantM, moyenneM, moyenneTot,
-                    totTotal, totNouveaux, totMontant };
+                  // Montant total CLASSIQUE : exclut les adhésions offertes
+                  const montantM  = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(a.adhesion_offerte?0:(parseFloat(a.montant)||0)),0));
+                  // Montant total INCLUANT les adhésions offertes
+                  const montantInclM = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                  const totTotal = totalM.reduce((a,b)=>a+b,0), totNouveaux = nouveauxM.reduce((a,b)=>a+b,0);
+                  const totMontant = montantM.reduce((a,b)=>a+b,0), totMontantIncl = montantInclM.reduce((a,b)=>a+b,0);
+                  // Montant moyen = incluant offertes / nb total adhésions
+                  const moyenneM = montantInclM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
+                  const moyenneTot = totTotal>0?totMontantIncl/totTotal:0;
+                  return { cafe:c, totalM, nouveauxM, montantM, montantInclM, moyenneM, moyenneTot,
+                    totTotal, totNouveaux, totMontant, totMontantIncl };
                 });
                 const sumCol = (key) => moisSel.map((_,i)=>perCafeMonth.reduce((s,c)=>s+c[key][i],0));
                 const sumTotalM = sumCol("totalM"), sumNouveauxM = sumCol("nouveauxM"), sumMontantM = sumCol("montantM");
@@ -2639,7 +2660,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                         {perCafeMonth.map(c=>(
                           <React.Fragment key={c.cafe}>
                             <tr className="border-t-2 border-gray-100 hover:bg-gray-50">
-                              <td rowSpan={4} className="px-3 py-2 font-semibold text-gray-800 align-top border-r border-gray-50">{c.cafe}</td>
+                              <td rowSpan={5} className="px-3 py-2 font-semibold text-gray-800 align-top border-r border-gray-50">{c.cafe}</td>
                               <td className="px-3 py-2 text-violet-700">Nb total adhérents</td>
                               {c.totalM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-violet-600">{fmtN(v)}</td>)}
                               <td className="px-3 py-2 text-right font-bold text-violet-700">{c.totTotal}</td>
@@ -2650,9 +2671,14 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                               <td className="px-3 py-2 text-right font-bold text-sky-700">{c.totNouveaux}</td>
                             </tr>
                             <tr className="hover:bg-gray-50">
-                              <td className="px-3 py-2 text-gray-600">Montant adhésions (€)</td>
+                              <td className="px-3 py-2 text-gray-600">Montant total (€)</td>
                               {c.montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-700">{fmtE(v)}</td>)}
                               <td className="px-3 py-2 text-right font-bold text-gray-800">{fmtE(c.totMontant)}</td>
+                            </tr>
+                            <tr className="hover:bg-gray-50">
+                              <td className="px-3 py-2 text-gray-500">Montant total incl. offertes (€)</td>
+                              {c.montantInclM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-600">{fmtE(v)}</td>)}
+                              <td className="px-3 py-2 text-right font-semibold text-gray-700">{fmtE(c.totMontantIncl)}</td>
                             </tr>
                             <tr className="border-b border-gray-100 hover:bg-gray-50 italic">
                               <td className="px-3 py-2 text-gray-400">Montant moyen (€)</td>
@@ -2919,10 +2945,31 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       };
 
       const doSave = async (f, allRows) => {
+        const isCreation = !f.id; // distingue création / modification — le don n'est généré qu'à la création
         const nr = { ...f, id: f.id || Date.now(), created_at: f.created_at || localDateTime() };
         const upd = f.id ? allRows.map(r=>r.id===f.id?nr:r) : [nr, ...allRows];
         setRows(upd); setLoading(false);
         await saveData(cafe,"adherents",upd);
+
+        // Adhésion offerte : génère automatiquement la ligne Don correspondante (uniquement à la création)
+        if (isCreation && nr.adhesion_offerte && parseFloat(nr.montant) > 0) {
+          const nomComplet = nr.structure ? (nr.nom||"").trim() : `${nr.prenom||""} ${(nr.nom||"").toUpperCase()}`.trim();
+          const donRows = await loadData(cafe, "dons");
+          const donNr = {
+            id: Date.now()+1,
+            date: nr.date_adhesion,
+            semaine: getWeekForDate(nr.date_adhesion),
+            mois: getMonthForDate(nr.date_adhesion),
+            produit: "Don",
+            montant: parseFloat(nr.montant) || 0,
+            mode: nr.mode_reglement,
+            recu_fiscal: "non",
+            commentaire: `adhésion offerte ${nomComplet}`,
+            recorded_at: localDateTime(),
+          };
+          await saveData(cafe, "dons", [donNr, ...(donRows||[])]);
+        }
+
         resetForm();
       };
 
