@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- DaddyPay v4.1.0 · Build du 29/06/2026 18:12 -->
+<!-- DaddyPay v4.1.2 · Build du 08/07/2026 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -113,11 +113,23 @@
     const saveUsersLocal = (u) => { try { localStorage.setItem(USERS_KEY, JSON.stringify(u)); } catch {} };
     // loadUsers() : tente Supabase d'abord (source de vérité), retombe sur le cache local sinon.
     const loadUsers = async () => {
+      let list;
       try {
         const remote = await loadData("_config", "users", true);
-        if (remote && remote.length > 0) { saveUsersLocal(remote); return remote; }
-      } catch {}
-      return loadUsersLocal();
+        list = (remote && remote.length > 0) ? remote : loadUsersLocal();
+      } catch { list = loadUsersLocal(); }
+      // Backfill : garantit la présence du compte Directeur (lecture seule sur tous les cafés),
+      // même sur une base déjà en production — pas besoin de le créer manuellement.
+      // Mot de passe par défaut identique à celui des autres comptes non-admin (Opérations, cafés).
+      if (!list.some(u => u.role === "directeur")) {
+        const directeurUser = { login: "Directeur", pwd: b64e("Henon69004!"), role: "directeur", cafe: null };
+        list = [...list, directeurUser];
+        saveUsersLocal(list);
+        saveData("_config", "users", list); // fire-and-forget
+      } else {
+        saveUsersLocal(list);
+      }
+      return list;
     };
     // saveUsers() : écrit sur Supabase (source de vérité, propagation immédiate) ET en local (fallback).
     const saveUsers = async (u) => {
@@ -212,7 +224,7 @@
       "produit","evenement","client","fournisseur","typo","destination",
       "qte","Prix de vente unitaire","HT_PU","tva_taux","tva_unitaire","tva_total","ht_total","montant TTC payé",
       "montant_devis","statut_devis","date_evenement",
-      "mode","facture_teams","no_facture","commentaire","id","recorded_at"
+      "mode","facture_teams","no_facture","commentaire","id","recorded_at","by"
     ];
     // Export ADHÉRENTS — structure dédiée avec 1 colonne par rôle additionnel × par date
     // Colonnes fixes — les colonnes "Réseau : X" sont ajoutées dynamiquement à la fin
@@ -220,11 +232,11 @@
     const CSV_COL_ORDER_ADHERENTS = [
       "Café","Structure","civilite","prenom","nom","contact_nom","adresse","code_postal","mail","telephone",
       "date_naissance","annee_adhesion","Montant d'adhésion","mode de règlement",
-      "adhesion_offerte","renouvellement","de_passage","source_arrivee",
-      "roles_additionnels \"bénévole\"","Bénévole : date formation","Bénévole : date début","Bénévole : date fin",
-      "roles_additionnels \"Talentueux\"","Talentueux : date formation","Talentueux : date début","Talentueux : date fin",
-      "roles_additionnels \"Tisseur de Lien\"","Tisseur de Lien : date formation","Tisseur de Lien : date début","Tisseur de Lien : date fin",
-      "talents","id","created_le"
+      "adhesion_offerte","renouvellement","de_passage","resident","source_arrivee",
+      "roles_additionnels \"bénévole\"","Bénévole : date formation","Bénévole : date début","Bénévole : date fin","Bénévole : intéressé(e)",
+      "roles_additionnels \"Talentueux\"","Talentueux : date formation","Talentueux : date début","Talentueux : date fin","Talentueux : intéressé(e)",
+      "roles_additionnels \"Tisseur de Lien\"","Tisseur de Lien : date formation","Tisseur de Lien : date début","Tisseur de Lien : date fin","Tisseur de Lien : intéressé(e)",
+      "talents","id","by","created_le"
     ];
     // Construit la liste de colonnes complète : colonnes fixes + 1 colonne "Réseau : X" par réseau, en fin de fichier
     const buildAdherentsColOrder = (reseauxNoms) => [...CSV_COL_ORDER_ADHERENTS, ...reseauxNoms.map(n=>`Réseau : ${n}`)];
@@ -248,7 +260,7 @@
       const out = {};
       // Colonnes directes sans renommage
       ["date","semaine","mois","produit","evenement","fournisseur","typo","destination",
-       "qte","mode","facture_teams","no_facture","commentaire","id","recorded_at","evenement_ta"].forEach(k => {
+       "qte","mode","facture_teams","no_facture","commentaire","id","recorded_at","evenement_ta","by"].forEach(k => {
         if (r[k] !== undefined) out[k] = r[k];
       });
 
@@ -542,7 +554,18 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     const _saveLocks  = new Map(); // clé → Promise en cours
     const _savePending = new Map(); // clé → dernière data en attente
 
+    // Rôle courant — mis à jour par App à chaque changement de session.
+    // Sert de verrou de sécurité indépendant de l'UI : le rôle "directeur" (lecture seule)
+    // ne peut écrire en base sous AUCUNE condition, même si un composant oublie de se désactiver.
+    let _currentRole = null;
+    const setCurrentRole = (role) => { _currentRole = role; };
+
     const saveData = async (cafe, section, data) => {
+      if (_currentRole === "directeur") {
+        console.warn("Écriture bloquée : rôle Directeur (lecture seule).", cafe, section);
+        window.dispatchEvent(new CustomEvent("daddy_readonly_block"));
+        return false;
+      }
       const key = cafe + ":" + section;
 
       // 1. Cache mémoire immédiat
@@ -686,6 +709,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
     // une colonne dédiée oui/non en fin de fichier, pour permettre filtres et tableaux croisés.
     const exportAdherents = (rows, cafe, reseauxNoms=[]) => {
       const getRole = (r, roleName) => (r.roles_additionnels||[]).find(x=>x.role===roleName);
+      const estInteresse = (r, roleName) => (r.interets||[]).includes(roleName);
       return rows.map(r => {
         const benevole   = getRole(r, "Bénévole");
         const talentueux = getRole(r, "Talentueux");
@@ -708,21 +732,26 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
           adhesion_offerte: r.adhesion_offerte ? "oui" : "non",
           renouvellement: r.renouvellement ? "oui" : "non",
           de_passage: r.de_passage ? "oui" : "non",
+          resident: r.resident ? "oui" : "non",
           source_arrivee: r.source_arrivee,
           'roles_additionnels "bénévole"': benevole ? "oui" : "non",
           "Bénévole : date formation": benevole?.date_formation || "",
           "Bénévole : date début": benevole?.date_debut || "",
           "Bénévole : date fin": benevole?.date_fin || "",
+          "Bénévole : intéressé(e)": estInteresse(r, "Bénévole") ? "oui" : "non",
           'roles_additionnels "Talentueux"': talentueux ? "oui" : "non",
           "Talentueux : date formation": talentueux?.date_formation || "",
           "Talentueux : date début": talentueux?.date_debut || "",
           "Talentueux : date fin": talentueux?.date_fin || "",
+          "Talentueux : intéressé(e)": estInteresse(r, "Talentueux") ? "oui" : "non",
           'roles_additionnels "Tisseur de Lien"': tisseur ? "oui" : "non",
           "Tisseur de Lien : date formation": tisseur?.date_formation || "",
           "Tisseur de Lien : date début": tisseur?.date_debut || "",
           "Tisseur de Lien : date fin": tisseur?.date_fin || "",
+          "Tisseur de Lien : intéressé(e)": estInteresse(r, "Tisseur de lien") ? "oui" : "non",
           talents: r.talents||"",
           id: r.id,
+          by: r.by||"",
           created_le: r.created_at ? r.created_at.slice(0,10).split("-").reverse().join("/") : "",
         };
         // Une colonne par réseau existant, en fin de fichier — oui/non
@@ -811,7 +840,7 @@ ${csv.slice(0,8000)}${csv.length>8000?"…(tronqué)":""}`
                   <button onClick={()=>setShow(v=>!v)} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 text-xs">{show?"🙈":"👁️"}</button></div></div>
               {err&&<p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">{err}</p>}
               <button onClick={submit} disabled={checking} style={{backgroundColor:ADMIN_COLOR}} className="w-full hover:opacity-90 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition-opacity shadow-sm">{checking?"Connexion…":"Se connecter"}</button>
-              <p className="text-center text-xs text-gray-400 mt-3">v4.1.0 · Build du 29/06/2026 18:12</p>
+              <p className="text-center text-xs text-gray-400 mt-3">v4.1.2 · Build du 08/07/2026</p>
             </div>
           </div>
         </div>
@@ -1019,16 +1048,21 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <button onClick={createCafe} className="mt-3 bg-gray-800 hover:bg-gray-900 text-white px-5 py-2 rounded-xl text-sm font-semibold transition-colors">+ Créer le café</button>
           </div>
 
-          {/* Reset mdp — cafés + opérations */}
+          {/* Reset mdp — cafés + opérations + directeur */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="px-5 py-3 bg-gray-50 border-b border-gray-100"><h3 className="font-semibold text-gray-800">🔑 Gestion des accès</h3></div>
             <div className="divide-y divide-gray-50">
-              {users.filter(u=>u.role==="cafe"||u.role==="operations").map(u=>(
+              {users.filter(u=>u.role==="cafe"||u.role==="operations"||u.role==="directeur"||u.role==="admin").map(u=>(
                 <div key={u.login} className="px-5 py-3 flex flex-wrap items-center gap-3">
                   <div className="flex-1 min-w-48">
                     <span className="font-medium text-sm text-gray-800">{u.cafe||u.login}</span>
                     <span className="ml-2 text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{u.login}</span>
+                    {u.role==="admin"&&<span className="ml-1 text-xs text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-full">👑 Administrateur (Finance)</span>}
                     {u.role==="operations"&&<span className="ml-1 text-xs text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">Opérations</span>}
+                    {u.role==="directeur"&&<span className="ml-1 text-xs text-slate-600 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-full">🔒 Directeur</span>}
+                    {u.role==="admin"&&<p className="text-xs text-gray-400 mt-0.5">Accès en lecture et écriture à tous les cafés + Administration</p>}
+                    {u.role==="operations"&&<p className="text-xs text-gray-400 mt-0.5">Accès en lecture et écriture aux cafés</p>}
+                    {u.role==="directeur"&&<p className="text-xs text-gray-400 mt-0.5">Accès en lecture seule aux cafés</p>}
                   </div>
                   <div className="flex items-center gap-2">
                     <input type="text" placeholder="Nouveau mot de passe" value={editPwd[u.login]||""} onChange={e=>setEditPwd(p=>({...p,[u.login]:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-amber-300"/>
@@ -1404,7 +1438,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     };
 
     /* ── SECTION CaisseTA ── */
-    const SectionCaisseTA = ({ cafe, carte, refreshTick=0 }) => {
+    const SectionCaisseTA = ({ cafe, carte, refreshTick=0, isReadOnly=false, by="" }) => {
       const [rows,setRows]=useState([]); const [date,setDate]=useState(new Date().toISOString().slice(0,10));
       const [mode,setMode]=useState("CB"); const [panier,setPanier]=useState([]); const [selProd,setSelProd]=useState(""); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
@@ -1416,7 +1450,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const add = (label) => { if(!label)return; const item=carte.find(c=>c.label===label); if(!item)return; setPanier(p=>{const ei=p.findIndex(l=>l.produit===label); if(ei>=0){const c=[...p];c[ei]={...c[ei],qte:c[ei].qte+1};return c;} return [...p,{produit:label,prix_unitaire:item.prix,qte:1,typo:item.type,tva_taux:item.tva_taux||"0",prix_ht:item.prix_ht||calcHT(item.prix,item.tva_taux||"0")}];}); setSelProd(""); };
       const upd = (i,d)=>setPanier(p=>{const c=[...p];c[i]={...c[i],qte:Math.max(1,c[i].qte+d)};return c;});
       const rem = (i)=>setPanier(p=>p.filter((_,j)=>j!==i));
-      const valider = async()=>{ if(!panier.length||!date)return; const now=Date.now(); const recAt=localDateTime(); const evt=(evenementActif&&evenementTexte.trim())?evenementTexte.trim().slice(0,20):null; const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo,...(l.tva_taux&&l.tva_taux!=="0"?{tva_taux:l.tva_taux,prix_ht:l.prix_ht}:{}),...(evt?{evenement_ta:evt}:{}),recorded_at:recAt})); const upd=[...nr,...rows]; setRows(upd); setPanier([]); setMontantDonne(""); await saveData(cafe,"caisseta",upd); };
+      const valider = async()=>{ if(isReadOnly||!panier.length||!date)return; const now=Date.now(); const recAt=localDateTime(); const evt=(evenementActif&&evenementTexte.trim())?evenementTexte.trim().slice(0,20):null; const nr=panier.map((l,i)=>({id:now+i,date,semaine:getWeekForDate(date),mois:getMonthForDate(date),produit:l.produit,qte:l.qte,prix_unitaire:l.prix_unitaire,prix_total:parseFloat((l.prix_unitaire*l.qte).toFixed(2)),mode,typo:l.typo,...(l.tva_taux&&l.tva_taux!=="0"?{tva_taux:l.tva_taux,prix_ht:l.prix_ht}:{}),...(evt?{evenement_ta:evt}:{}),recorded_at:recAt,by})); const upd=[...nr,...rows]; setRows(upd); setPanier([]); setMontantDonne(""); await saveData(cafe,"caisseta",upd); };
       const del = async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"caisseta",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       const softs=carte.filter(c=>c.type==="Soft"), alcools=carte.filter(c=>c.type==="Alcool"), nourr=carte.filter(c=>c.type==="Snacking");
@@ -1463,25 +1497,25 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   {montantDonne&&parseFloat(montantDonne)>=total&&<div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-gray-500">Rendu de monnaie</p><p className="text-xl font-bold text-emerald-600">{(parseFloat(montantDonne)-total).toFixed(2)} €</p></div>}
                   {montantDonne&&parseFloat(montantDonne)<total&&<div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-rose-500 font-medium">⚠️ Montant insuffisant ({(total-parseFloat(montantDonne)).toFixed(2)} € manquant)</p></div>}
                 </div>}
-                <button onClick={valider} disabled={!panier.length} className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors shadow-sm">✅ Valider & enregistrer</button>
+                <button onClick={valider} disabled={!panier.length||isReadOnly} className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors shadow-sm">✅ Valider & enregistrer</button>
                 {panier.length>0&&<button onClick={()=>setPanier([])} className="text-xs text-gray-400 hover:text-gray-600 text-center">Vider le panier</button>}
               </div>
             </div>
           </div>
-          <TableWrapper headers={["Date","Semaine","Produit","Qté","P.U. TTC","TVA","Total TTC","Mode","Typo","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.produit,r.qte,`${r.prix_unitaire}€`,(r.tva_taux&&r.tva_taux!=="0")?<span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded font-medium">{r.tva_taux}%</span>:<span className="text-xs text-gray-300">—</span>,<strong>{r.prix_total?.toFixed(2)}€</strong>,<Badge color={r.mode==="CB"?"sky":r.mode==="Espèces"?"amber":r.mode==="Chèque"?"violet":"emerald"}>{r.mode}</Badge>,r.typo,<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
+          <TableWrapper headers={["Date","Semaine","Produit","Qté","P.U. TTC","TVA","Total TTC","Mode","Typo","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.produit,r.qte,`${r.prix_unitaire}€`,(r.tva_taux&&r.tva_taux!=="0")?<span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded font-medium">{r.tva_taux}%</span>:<span className="text-xs text-gray-300">—</span>,<strong>{r.prix_total?.toFixed(2)}€</strong>,<Badge color={r.mode==="CB"?"sky":r.mode==="Espèces"?"amber":r.mode==="Chèque"?"violet":"emerald"}>{r.mode}</Badge>,r.typo,isReadOnly?<span className="text-xs text-gray-300">—</span>:<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
         </div>
       );
     };
 
     /* ── SECTION TCAM ── */
-    const SectionTCAM = ({ cafe, refreshTick=0 }) => {
+    const SectionTCAM = ({ cafe, refreshTick=0, isReadOnly=false, by="" }) => {
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),evenement:"",pu:"",qte:"",montant:"",mode:"Espèces",commentaire:""});
       const [montantDonneTCAM,setMontantDonneTCAM]=useState("");
       useEffect(()=>{loadData(cafe,"tcam").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
       const puV=parseFloat(f.pu)||0, qteV=parseFloat(f.qte)||0, hasC=puV>0&&qteV>0, tot=hasC?parseFloat((puV*qteV).toFixed(2)):(parseFloat(f.montant)||0);
-      const submit=async()=>{ if(!f.evenement||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),evenement:f.evenement,pu:puV,qte:qteV||null,montant:tot,mode:f.mode,commentaire:f.commentaire,recorded_at:localDateTime()}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,evenement:"",pu:"",qte:"",montant:"",commentaire:""})); setMontantDonneTCAM(""); await saveData(cafe,"tcam",upd); };
+      const submit=async()=>{ if(isReadOnly||!f.evenement||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),evenement:f.evenement,pu:puV,qte:qteV||null,montant:tot,mode:f.mode,commentaire:f.commentaire,recorded_at:localDateTime(),by}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,evenement:"",pu:"",qte:"",montant:"",commentaire:""})); setMontantDonneTCAM(""); await saveData(cafe,"tcam",upd); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"tcam",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
@@ -1505,22 +1539,22 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   {montantDonneTCAM&&parseFloat(montantDonneTCAM)>=tot&&<div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-gray-500">Rendu de monnaie</p><p className="text-xl font-bold text-emerald-600">{(parseFloat(montantDonneTCAM)-tot).toFixed(2)} €</p></div>}
                   {montantDonneTCAM&&parseFloat(montantDonneTCAM)<tot&&<div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-center"><p className="text-xs text-rose-500 font-medium">⚠️ Montant insuffisant ({(tot-parseFloat(montantDonneTCAM)).toFixed(2)} € manquant)</p></div>}
                 </div>}
-                <button onClick={submit} className="bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
+                <button onClick={submit} disabled={isReadOnly} className="bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-3 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
               </div>
             </div>
           </div>
-          <TableWrapper headers={["Date","Semaine","Événement","P.U.","Qté","Montant","Mode","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.evenement,r.pu?`${r.pu}€`:"-",r.qte||"-",<strong>{r.montant?.toFixed(2)}€</strong>,<Badge color="amber">{r.mode}</Badge>,<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
+          <TableWrapper headers={["Date","Semaine","Événement","P.U.","Qté","Montant","Mode","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.evenement,r.pu?`${r.pu}€`:"-",r.qte||"-",<strong>{r.montant?.toFixed(2)}€</strong>,<Badge color="amber">{r.mode}</Badge>,isReadOnly?<span className="text-xs text-gray-300">—</span>:<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
         </div>
       );
     };
 
     /* ── SECTION DONS ── */
-    const SectionDons = ({ cafe, refreshTick=0 }) => {
+    const SectionDons = ({ cafe, refreshTick=0, isReadOnly=false, by="" }) => {
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),produit:"Don",montant:"",mode:"CB",recu_fiscal:"non",commentaire:""});
       useEffect(()=>{loadData(cafe,"dons").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
-      const submit=async()=>{ if(!f.montant||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),produit:f.produit,montant:parseFloat(f.montant),mode:f.mode,recu_fiscal:f.recu_fiscal,commentaire:f.commentaire,recorded_at:localDateTime()}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,montant:"",commentaire:""})); await saveData(cafe,"dons",upd); };
+      const submit=async()=>{ if(isReadOnly||!f.montant||!f.date)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),produit:f.produit,montant:parseFloat(f.montant),mode:f.mode,recu_fiscal:f.recu_fiscal,commentaire:f.commentaire,recorded_at:localDateTime(),by}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,montant:"",commentaire:""})); await saveData(cafe,"dons",upd); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"dons",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
@@ -1539,17 +1573,17 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <div className="text-sm text-gray-500">Total : <strong className="text-rose-600">{f.montant?parseFloat(f.montant).toFixed(2):"0.00"} €</strong> — <Badge color="rose">{getWeekForDate(f.date)}</Badge></div>
               <div className="flex items-end gap-3">
                 <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label><select value={f.mode} onChange={e=>setF(x=>({...x,mode:e.target.value}))} className="border-2 border-rose-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-rose-400 bg-rose-50">{MODES.map(m=><option key={m}>{m}</option>)}</select></div>
-                <button onClick={submit} className="bg-rose-500 hover:bg-rose-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
+                <button onClick={submit} disabled={isReadOnly} className="bg-rose-500 hover:bg-rose-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
               </div>
             </div>
           </div>
-          <TableWrapper headers={["Date","Semaine","Produit","Montant","Mode","Reçu fiscal","Commentaire","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.produit,<strong>{r.montant?.toFixed(2)}€</strong>,<Badge color="rose">{r.mode}</Badge>,r.recu_fiscal==="oui"?"✅ Oui":"Non",<span className="text-xs text-gray-500">{r.commentaire}</span>,<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
+          <TableWrapper headers={["Date","Semaine","Produit","Montant","Mode","Reçu fiscal","Commentaire","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.produit,<strong>{r.montant?.toFixed(2)}€</strong>,<Badge color="rose">{r.mode}</Badge>,r.recu_fiscal==="oui"?"✅ Oui":"Non",<span className="text-xs text-gray-500">{r.commentaire}</span>,isReadOnly?<span className="text-xs text-gray-300">—</span>:<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
         </div>
       );
     };
 
     /* ── SECTION ACHATS ── */
-    const SectionAchats = ({ cafe, refreshTick=0 }) => {
+    const SectionAchats = ({ cafe, refreshTick=0, isReadOnly=false, by="" }) => {
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
       const [destinations,setDestinations] = useState(()=>loadDestinations(cafe));
@@ -1560,7 +1594,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       },[cafe]);
       const [f,setF]=useState({date:new Date().toISOString().slice(0,10),fournisseur:"",destination:loadDestinations(cafe)[0]||"",montant:"",mode:"CB",no_facture:"",facture_teams:"non"});
       useEffect(()=>{loadData(cafe,"achats").then(d=>{setRows(d);setLoading(false);});},[cafe,refreshTick]);
-      const submit=async()=>{ if(!f.fournisseur||!f.montant)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),fournisseur:f.fournisseur,destination:f.destination,montant:parseFloat(f.montant),mode:f.mode,no_facture:f.no_facture,facture_teams:f.facture_teams,recorded_at:localDateTime()}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,fournisseur:"",montant:"",no_facture:""})); await saveData(cafe,"achats",upd); };
+      const submit=async()=>{ if(isReadOnly||!f.fournisseur||!f.montant)return; const nr={id:Date.now(),date:f.date,semaine:getWeekForDate(f.date),mois:getMonthForDate(f.date),fournisseur:f.fournisseur,destination:f.destination,montant:parseFloat(f.montant),mode:f.mode,no_facture:f.no_facture,facture_teams:f.facture_teams,recorded_at:localDateTime(),by}; const upd=[nr,...rows]; setRows(upd); setF(x=>({...x,fournisseur:"",montant:"",no_facture:""})); await saveData(cafe,"achats",upd); };
       const del=async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"achats",u); };
       if(loading)return<div className="p-8 text-center text-gray-400">Chargement...</div>;
       return (
@@ -1580,17 +1614,17 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <div className="text-sm text-gray-500">Total : <strong className="text-sky-600">{f.montant?parseFloat(f.montant).toFixed(2):"0.00"} €</strong> — <Badge color="sky">{getWeekForDate(f.date)}</Badge></div>
               <div className="flex items-end gap-3">
                 <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label><select value={f.mode} onChange={e=>setF(x=>({...x,mode:e.target.value}))} className="border-2 border-sky-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sky-400 bg-sky-50">{MODES.map(m=><option key={m}>{m}</option>)}</select></div>
-                <button onClick={submit} className="bg-sky-500 hover:bg-sky-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
+                <button onClick={submit} disabled={isReadOnly} className="bg-sky-500 hover:bg-sky-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">+ Enregistrer</button>
               </div>
             </div>
           </div>
-          <TableWrapper headers={["Date","Semaine","Fournisseur","Destination","Montant","Mode","Facture","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.fournisseur,<Badge color="sky">{r.destination}</Badge>,<strong>{r.montant?.toFixed(2)}€</strong>,r.mode,r.facture_teams==="oui"?"✅":"❌",<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
+          <TableWrapper headers={["Date","Semaine","Fournisseur","Destination","Montant","Mode","Facture","Suppr."]} rows={rows.slice(0,100).map(r=>[r.date,r.semaine,r.fournisseur,<Badge color="sky">{r.destination}</Badge>,<strong>{r.montant?.toFixed(2)}€</strong>,r.mode,r.facture_teams==="oui"?"✅":"❌",isReadOnly?<span className="text-xs text-gray-300">—</span>:<button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button>])}/>
         </div>
       );
     };
 
     /* ── SECTION PRIVATISATION ── */
-    const SectionPrivatisation = ({ cafe, refreshTick=0 }) => {
+    const SectionPrivatisation = ({ cafe, refreshTick=0, isReadOnly=false, by="" }) => {
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [confirmId,setConfirmId]=useState(null);
       const [services,setServices]=useState([]);
@@ -1653,13 +1687,18 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const updQte = (svcId, qte) => setF(x=>({...x, lignes: x.lignes.map(l=>l.id===svcId?{...l,qte}:l)}));
 
       const saveDevis = async () => {
+        if (isReadOnly) return;
         if (!f.nom.trim() && !f.nom_entreprise.trim()) { alert("Le nom du client (ou de l'entreprise) est obligatoire."); return; }
         if (!f.date_evenement) { alert("La date de l'événement est obligatoire."); return; }
         if (f.telephone.trim() && !isValidTelFR(f.telephone)) { if(!window.confirm(`Le numéro "${f.telephone}" ne ressemble pas à un numéro français. Confirmez-vous cette saisie ?`)) return; }
-        if (f.mail && !isValidEmail(f.mail)) { alert("L'adresse mail n'est pas valide."); return; }
+        if (!f.mail || !f.mail.trim()) { alert("Le mail du client est obligatoire."); return; }
+        if (!isValidEmail(f.mail)) { alert("L'adresse mail n'est pas valide."); return; }
         if (f.lignes.filter(l=>{const svc=servicesCalc.find(s=>s.id===l.id); return svc&&(svc.type==="option1"||svc.type==="option2");}).length === 0) {
           alert("Une option de privatisation (Option 1 ou Option 2) est obligatoire."); return;
         }
+        const acompteMontant = parseFloat(f.acompte_montant)||0;
+        if (acompteMontant > 0 && !f.acompte_mode) { alert("Le moyen de paiement de l'acompte est obligatoire."); return; }
+        if (acompteMontant > 0 && !f.acompte_date_paiement) { alert("La date de paiement de l'acompte est obligatoire."); return; }
         const clientLabel = f.structure ? (f.nom_entreprise||f.contact_nom) : `${f.prenom} ${f.nom}`.trim();
         const nr = {
           ...f,
@@ -1668,18 +1707,53 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
           mois: getMonthForDate(f.date_evenement),
           montant_devis: totaux.total,
           client: clientLabel,
-          recorded_at: localDateTime(),
+          recorded_at: f.recorded_at || localDateTime(),
+          by: f.by || by,
           last_modified_at: new Date().toISOString(),
+          // Paiement d'un acompte → le devis passe directement en "validé"
+          ...(acompteMontant > 0 ? {
+            statut: "validé",
+            date_decision: f.date_decision || new Date().toISOString().slice(0,10),
+            acompte_montant: acompteMontant,
+            acompte_mode: f.acompte_mode,
+            acompte_date_paiement: f.acompte_date_paiement,
+          } : {}),
         };
-        const upd = f.id ? rows.map(r=>r.id===f.id?nr:r) : [nr, ...rows];
+        let upd = f.id ? rows.map(r=>r.id===f.id?nr:r) : [nr, ...rows];
+        // L'acompte est comptabilisé en Privatisation sur la semaine de SA date de paiement,
+        // via une ligne dédiée (comme n'importe quelle privatisation "payée") — évite tout
+        // double comptage avec le solde qui sera, lui, comptabilisé à son propre règlement.
+        if (acompteMontant > 0 && !f.acompte_row_id) {
+          const acompteRow = {
+            id: nr.id + 1,
+            type_paiement: "acompte",
+            devis_id: nr.id,
+            statut: "payé",
+            client: clientLabel,
+            date_evenement: f.date_evenement,
+            date_reglement: f.acompte_date_paiement,
+            semaine: getWeekForDate(f.acompte_date_paiement),
+            mois: getMonthForDate(f.acompte_date_paiement),
+            montant_devis: acompteMontant,
+            montant_facture: acompteMontant,
+            mode: f.acompte_mode,
+            commentaire: `Acompte sur devis — ${clientLabel} (événement du ${f.date_evenement})`,
+            recorded_at: localDateTime(),
+            by,
+          };
+          upd = [acompteRow, ...upd];
+          nr.acompte_row_id = acompteRow.id;
+          upd = upd.map(r=>r.id===nr.id?nr:r);
+        }
         setRows(upd); await saveData(cafe,"privatisation",upd);
         setShowForm(false); setEditId(null);
         setPrintDoc({type:"devis", devis:nr});
       };
 
-      const del = async(id) => { setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"privatisation",u); };
+      const del = async(id) => { if(isReadOnly)return; setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"privatisation",u); };
 
       const applyDecision = async () => {
+        if (isReadOnly) return;
         if (!decisionDate) { alert("La date de décision est obligatoire."); return; }
         const upd = rows.map(r=>r.id===decisionId ? {...r, statut: decisionType, date_decision: decisionDate, last_modified_at: new Date().toISOString()} : r);
         setRows(upd); await saveData(cafe,"privatisation",upd);
@@ -1689,31 +1763,54 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const openPaiement = (r) => {
         setPaiementId(r.id);
         setPaiementForm({
-          lignes_finales: r.lignes.map(l=>({...l})),
+          // Carte complète : toutes les lignes du catalogue, préremplies avec les quantités du devis
+          // (0 pour celles qui n'avaient pas été retenues) — permet d'ajuster librement la facture.
+          lignes_finales: servicesCalc.map(s=>{ const l=r.lignes.find(x=>x.id===s.id); return {id:s.id, qte:l?l.qte:0}; }),
+          option_choisie: r.option_choisie,
           mode: "Chèque",
           date_reglement: new Date().toISOString().slice(0,10),
         });
       };
       const updQteFinale = (svcId, qte) => setPaiementForm(pf=>({...pf, lignes_finales: pf.lignes_finales.map(l=>l.id===svcId?{...l,qte}:l)}));
+      const toggleLigneFinale = (svcId) => setPaiementForm(pf=>{
+        const svc = servicesCalc.find(s=>s.id===svcId);
+        const l = pf.lignes_finales.find(x=>x.id===svcId);
+        const willCheck = !(l && l.qte>0);
+        const lignes_finales = pf.lignes_finales.map(x=>x.id===svcId?{...x,qte:willCheck?1:0}:x);
+        let option_choisie = pf.option_choisie;
+        if (willCheck && svc?.type==="option1") option_choisie = "option1";
+        if (willCheck && svc?.type==="option2") option_choisie = "option2";
+        return {...pf, lignes_finales, option_choisie};
+      });
 
-      const totauxFinaux = paiementForm ? (()=>{ const r = rows.find(x=>x.id===paiementId); return r ? calcDevisTotaux(paiementForm.lignes_finales, servicesCalc, r.option_choisie, coutExtra, remises[r.type_client]||0) : {total:0}; })() : {total:0};
+      const totauxFinaux = paiementForm ? (()=>{ const r = rows.find(x=>x.id===paiementId); return r ? calcDevisTotaux(paiementForm.lignes_finales, servicesCalc, paiementForm.option_choisie, coutExtra, remises[r.type_client]||0) : {total:0}; })() : {total:0};
+      const acompteEnCours = paiementId ? (rows.find(x=>x.id===paiementId)?.acompte_montant || 0) : 0;
+      const montantAjusteFinal = Math.max(totauxFinaux.total, rows.find(x=>x.id===paiementId)?.montant_devis||0);
+      const montantRestantDu = montantAjusteFinal - acompteEnCours;
 
       const confirmPaiement = async () => {
+        if (isReadOnly) return;
         const r = rows.find(x=>x.id===paiementId);
         if (!r) return;
         if (!paiementForm.mode) { alert("Le moyen de paiement est obligatoire."); return; }
-        const montantFinal = Math.max(totauxFinaux.total, r.montant_devis);
-        // Une fois payé, la privatisation est comptabilisée sur la semaine de la date de PAIEMENT
+        // Le montant ajusté ne peut jamais être inférieur au montant du devis (comparaison AVANT déduction de l'acompte)
+        const montantFinal = montantAjusteFinal;
+        const montantRestant = montantRestantDu;
+        // Une fois payé, le SOLDE (montant restant, acompte déjà déduit) est comptabilisé en Privatisation
+        // sur la semaine de la date de PAIEMENT du solde — l'acompte, lui, a déjà sa propre ligne sur sa propre semaine.
         const nr = {
           ...r,
           statut:"payé",
           lignes_finales: paiementForm.lignes_finales,
-          montant_facture: montantFinal,
+          montant_facture: montantRestant,
+          montant_ajuste_brut: totauxFinaux.total,
+          montant_facture_brut: montantFinal,
           mode: paiementForm.mode,
           date_reglement: paiementForm.date_reglement,
           semaine: getWeekForDate(paiementForm.date_reglement),
           mois: getMonthForDate(paiementForm.date_reglement),
           last_modified_at: new Date().toISOString(),
+          by,
         };
         const upd = rows.map(x=>x.id===paiementId?nr:x);
         setRows(upd); await saveData(cafe,"privatisation",upd);
@@ -1727,8 +1824,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       };
 
       // Gestion du catalogue de services — à la main du café, directement dans cet onglet
-      const delService = (id) => { const upd=services.filter(s=>s.id!==id); setServices(upd); saveServicesPrivat(cafe, upd); };
+      const delService = (id) => { if(isReadOnly)return; const upd=services.filter(s=>s.id!==id); setServices(upd); saveServicesPrivat(cafe, upd); };
       const addService = () => {
+        if (isReadOnly) return;
         if (!newServiceForm.label.trim() || !newServiceForm.tarif) return;
         const newSvc = { id:"svc_"+Date.now(), groupe:newServiceForm.groupe, label:newServiceForm.label.trim(), unite:newServiceForm.unite, tarif:parseFloat(newServiceForm.tarif)||0, type:"conso" };
         const upd = [...services, newSvc]; setServices(upd); saveServicesPrivat(cafe, upd);
@@ -1742,7 +1840,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         const d = printDoc.devis;
         const lignesAffichees = printDoc.type==="facture" ? (d.lignes_finales||d.lignes) : d.lignes;
         const totauxDoc = calcDevisTotaux(lignesAffichees, servicesCalc, d.option_choisie, coutExtra, remises[d.type_client]||0);
-        const montantDoc = printDoc.type==="facture" ? d.montant_facture : d.montant_devis;
+        const montantDoc = printDoc.type==="facture" ? (d.montant_facture_brut ?? d.montant_facture) : d.montant_devis;
         const isFacture = printDoc.type==="facture";
         const recalculInferieur = isFacture && totauxDoc.total < d.montant_devis;
         return (
@@ -1799,8 +1897,13 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                     <tr><td className="py-0.5 text-gray-500">Privatisation</td><td className="text-right py-0.5">{totauxDoc.montantPrivat.toFixed(2)}€</td></tr>
                     <tr><td className="py-0.5 text-gray-500">Consommations</td><td className="text-right py-0.5">{totauxDoc.montantConso.toFixed(2)}€</td></tr>
                     <tr><td className="py-0.5 text-gray-500">Remise ({remises[d.type_client]||0}%, applicable sur la privatisation des locaux)</td><td className="text-right py-0.5 text-rose-600">-{totauxDoc.remise.toFixed(2)}€</td></tr>
+                    {isFacture && <tr><td className="py-0.5 text-gray-500 font-medium">Montant ajusté (privat. + conso. − remise)</td><td className="text-right py-0.5 font-medium">{(d.montant_ajuste_brut ?? totauxDoc.total).toFixed(2)}€</td></tr>}
                     {isFacture && <tr><td className="py-0.5 text-gray-500">Montant du devis validé</td><td className="text-right py-0.5">{d.montant_devis.toFixed(2)}€</td></tr>}
                     <tr className="border-t-2 border-gray-200"><td className="py-1 font-bold">TOTAL</td><td className="text-right py-1 font-bold text-base">{(montantDoc||totauxDoc.total).toFixed(2)}€</td></tr>
+                    {!isFacture && d.acompte_montant>0 && <tr><td className="py-0.5 text-violet-700 font-medium">Acompte</td><td className="text-right py-0.5 font-medium">{d.acompte_montant.toFixed(2)}€</td></tr>}
+                    {!isFacture && d.acompte_montant>0 && <tr><td className="py-0.5 text-xs text-gray-500" colSpan="2">Acompte payé le {d.acompte_date_paiement} par {d.acompte_mode}</td></tr>}
+                    {isFacture && d.acompte_montant>0 && <tr><td className="py-0.5 text-rose-600">Acompte déjà versé ({d.acompte_date_paiement})</td><td className="text-right py-0.5 text-rose-600">-{d.acompte_montant.toFixed(2)}€</td></tr>}
+                    {isFacture && d.acompte_montant>0 && <tr className="border-t border-gray-200"><td className="py-1 font-bold">NET À PAYER</td><td className="text-right py-1 font-bold text-base text-violet-700">{d.montant_facture.toFixed(2)}€</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1825,7 +1928,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             </div>
             <div className="flex gap-2 justify-end">
               <button onClick={()=>setDecisionId(null)} className="text-sm text-gray-500 px-4 py-2">Annuler</button>
-              <button onClick={applyDecision} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Confirmer</button>
+              <button onClick={applyDecision} disabled={isReadOnly} className="bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-semibold">Confirmer</button>
             </div>
           </div>
         </div>
@@ -1836,18 +1939,42 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl p-6 max-w-lg w-full space-y-4 my-8">
             <h3 className="font-semibold text-gray-800">Finaliser le paiement</h3>
-            <p className="text-xs text-gray-500">Ajustez les quantités finales si elles diffèrent du devis.</p>
-            <div className="max-h-64 overflow-y-auto space-y-1.5">
-              {paiementForm.lignes_finales.map(l=>{ const svc=servicesCalc.find(s=>s.id===l.id); if(!svc) return null; return (
-                <div key={l.id} className="flex items-center gap-2 text-sm">
-                  <span className="flex-1">{svc.label}</span>
-                  <input type="number" min="0" value={l.qte} onChange={e=>updQteFinale(l.id, parseFloat(e.target.value)||0)} className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm"/>
-                  <span className="text-gray-400 w-10">{svc.unite}</span>
+            <p className="text-xs text-gray-500">Carte complète du devis — ajustez librement les lignes (y compris celles non retenues initialement) pour établir la facture finale.</p>
+            <div className="max-h-72 overflow-y-auto space-y-3">
+              {[...new Set(servicesCalc.map(s=>s.groupe))].map(g=>{
+                const isOpt1Groupe = g.startsWith("Option 1");
+                const isOpt2Groupe = g.startsWith("Option 2");
+                const groupeDisabled = (isOpt1Groupe && paiementForm.option_choisie==="option2") || (isOpt2Groupe && paiementForm.option_choisie==="option1");
+                return (
+                <div key={g}>
+                  <p className="text-xs font-semibold text-violet-700 uppercase mb-1">{g}</p>
+                  <div className="space-y-1">
+                    {servicesCalc.filter(s=>s.groupe===g).map(s=>{
+                      const l = paiementForm.lignes_finales.find(x=>x.id===s.id);
+                      const active = l && l.qte>0;
+                      const disabledOpt = (isOpt1Groupe||isOpt2Groupe) && groupeDisabled && (s.type==="option1"||s.type==="option2");
+                      return (
+                        <div key={s.id} className="flex items-center gap-2 text-sm">
+                          <input type="checkbox" checked={!!active} disabled={!!disabledOpt} onChange={()=>toggleLigneFinale(s.id)} className="w-4 h-4 accent-violet-500"/>
+                          <span className="flex-1">{s.label} <span className="text-gray-400">({s.tarif.toFixed(2)}€/{s.unite})</span></span>
+                          {active && <div className="flex items-center gap-1.5">
+                            <input type="number" min="0" value={l.qte} onChange={e=>updQteFinale(s.id, parseFloat(e.target.value)||0)} className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm"/>
+                            <span className="text-xs text-gray-400 w-10">{s.unite}</span>
+                          </div>}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              );})}
+                );
+              })}
             </div>
-            <div className="bg-gray-50 rounded-xl p-3 text-sm flex justify-between"><span>Montant recalculé</span><strong>{totauxFinaux.total.toFixed(2)}€</strong></div>
-            <p className="text-xs text-gray-400">Le montant facturé ne peut pas être inférieur au montant du devis ({rows.find(x=>x.id===paiementId)?.montant_devis.toFixed(2)}€).</p>
+            <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
+              <div className="flex justify-between"><span>Montant total facturé</span><strong>{montantAjusteFinal.toFixed(2)}€</strong></div>
+              {acompteEnCours>0 && <div className="flex justify-between text-rose-600"><span>Acompte déjà versé</span><strong>−{acompteEnCours.toFixed(2)}€</strong></div>}
+              <div className="flex justify-between border-t border-gray-200 pt-1"><span>{acompteEnCours>0?"Montant recalculé, acompte déduit":"Montant recalculé"}</span><strong>{montantRestantDu.toFixed(2)}€</strong></div>
+            </div>
+            <p className="text-xs text-gray-400">Dans le cas où le montant recalculé est inférieur au montant du devis ({rows.find(x=>x.id===paiementId)?.montant_devis.toFixed(2)}€), le montant du devis reste dû.</p>
             <div><label className="text-xs text-gray-500 block mb-1">Moyen de paiement *</label>
               <select value={paiementForm.mode} onChange={e=>setPaiementForm(pf=>({...pf,mode:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{MODES_PRIVAT.map(m=><option key={m}>{m}</option>)}</select>
             </div>
@@ -1856,7 +1983,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             </div>
             <div className="flex gap-2 justify-end">
               <button onClick={()=>{setPaiementId(null);setPaiementForm(null);}} className="text-sm text-gray-500 px-4 py-2">Annuler</button>
-              <button onClick={confirmPaiement} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">✅ Enregistrer et imprimer la facture</button>
+              <button onClick={confirmPaiement} disabled={isReadOnly} className="bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-semibold">✅ Enregistrer et imprimer la facture</button>
             </div>
           </div>
         </div>
@@ -1902,7 +2029,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 </div>
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">Mail *</label>
-                  <input value={f.mail||""} onChange={e=>setF(x=>({...x,mail:e.target.value}))} className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${(f.mail&&!isValidEmail(f.mail))?"border-rose-300 focus:ring-rose-300":"border-gray-200 focus:ring-violet-300"}`}/>
+                  <input value={f.mail||""} onChange={e=>setF(x=>({...x,mail:e.target.value}))} className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${(!f.mail||!isValidEmail(f.mail))?"border-rose-300 focus:ring-rose-300":"border-gray-200 focus:ring-violet-300"}`}/>
+                  {!f.mail && <p className="text-xs text-rose-500 mt-0.5">Mail obligatoire</p>}
                   {f.mail&&!isValidEmail(f.mail) && <p className="text-xs text-rose-500 mt-0.5">Format mail invalide</p>}
                 </div>
                 <div><label className="text-xs text-gray-500 block mb-1">Nb de convives</label><input type="number" max="99" value={f.nb_convives} onChange={e=>setF(x=>({...x,nb_convives:e.target.value.slice(0,2)}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
@@ -1969,16 +2097,27 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   <tr className="border-t-2 border-gray-100"><td className="py-2 font-bold">TOTAL</td><td className="text-right py-2 font-bold text-lg text-violet-700">{totaux.total.toFixed(2)}€</td></tr>
                 </tbody>
               </table>
-              <button onClick={saveDevis} className="mt-4 bg-violet-600 hover:bg-violet-700 text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors">✅ Enregistrer et imprimer le devis</button>
+              <div className="mt-4 border-t border-gray-100 pt-3">
+                <label className="text-xs text-gray-500 block mb-1">Acompte <span className="text-gray-400">(premier paiement, facultatif)</span></label>
+                <div className="flex flex-wrap gap-3 items-end">
+                  <div><input type="number" min="0" step="0.5" placeholder="Montant €" value={f.acompte_montant} onChange={e=>setF(x=>({...x,acompte_montant:e.target.value}))} className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
+                  {(parseFloat(f.acompte_montant)||0) > 0 && <>
+                    <div><label className="text-xs text-gray-500 block mb-1">Moyen de paiement *</label><select value={f.acompte_mode} onChange={e=>setF(x=>({...x,acompte_mode:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">{MODES_PRIVAT.map(m=><option key={m}>{m}</option>)}</select></div>
+                    <div><label className="text-xs text-gray-500 block mb-1">Date de paiement *</label><input type="date" value={f.acompte_date_paiement} onChange={e=>setF(x=>({...x,acompte_date_paiement:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                  </>}
+                </div>
+                {(parseFloat(f.acompte_montant)||0) > 0 && <p className="text-xs text-violet-600 mt-2">🔒 Un acompte payé fait passer ce devis directement au statut <strong>Validé</strong>.</p>}
+              </div>
+              <button onClick={saveDevis} disabled={isReadOnly} className="mt-4 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors">✅ Enregistrer et imprimer le devis</button>
             </div>
           </div>
         );
       }
 
       // ── Liste des devis (vue par défaut) ──
-      const anneesDisponibles = [...new Set(rows.map(r=>r.date_evenement?.slice(0,4)).filter(Boolean))].sort((a,b)=>b-a);
+      const anneesDisponibles = [...new Set(rows.filter(r=>r.type_paiement!=="acompte").map(r=>r.date_evenement?.slice(0,4)).filter(Boolean))].sort((a,b)=>b-a);
       if (!anneesDisponibles.includes(String(anneeListe))) anneesDisponibles.unshift(String(anneeListe));
-      const rowsAnnee = rows.filter(r=>r.date_evenement?.slice(0,4)===String(anneeListe));
+      const rowsAnnee = rows.filter(r=>r.type_paiement!=="acompte" && r.date_evenement?.slice(0,4)===String(anneeListe));
 
       return (
         <div className="space-y-6">
@@ -1991,7 +2130,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <select value={anneeListe} onChange={e=>setAnneeListe(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
                 {anneesDisponibles.map(a=><option key={a} value={a}>{a}</option>)}
               </select>
-              <button onClick={newDevis} className="bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">+ Créer devis</button>
+              <button onClick={newDevis} disabled={isReadOnly} className="bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-semibold">+ Créer devis</button>
             </div>
           </div>
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -2006,16 +2145,16 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       <td className="px-3 py-2">{r.type_client}</td>
                       <td className="px-3 py-2">{r.montant_devis?.toFixed(2)}€</td>
                       <td className="px-3 py-2">{statutBadge(r.statut)}</td>
-                      <td className="px-3 py-2 font-semibold text-violet-700">{r.statut==="payé"?`${r.montant_facture?.toFixed(2)}€`:"—"}</td>
+                      <td className="px-3 py-2 font-semibold text-violet-700">{r.statut==="payé"?`${(r.montant_facture_brut??r.montant_facture)?.toFixed(2)}€`:"—"}</td>
                       <td className="px-3 py-2">{r.mode||"—"}</td>
                       <td className="px-3 py-2">{r.date_reglement||"—"}</td>
                       <td className="px-3 py-2 flex gap-1.5 flex-wrap">
-                        {r.statut==="créé" && <button onClick={()=>editDevis(r)} className="text-indigo-500 hover:text-indigo-700" title="Modifier">✏️</button>}
-                        {r.statut==="créé" && <button onClick={()=>{setDecisionId(r.id);setDecisionType("validé");setDecisionDate(new Date().toISOString().slice(0,10));}} className="text-emerald-600 hover:text-emerald-800 text-xs font-semibold">Décision</button>}
-                        {r.statut==="validé" && <button onClick={()=>openPaiement(r)} className="text-violet-600 hover:text-violet-800 text-xs font-semibold">💰 Payer</button>}
+                        {!isReadOnly && r.statut==="créé" && <button onClick={()=>editDevis(r)} className="text-indigo-500 hover:text-indigo-700" title="Modifier">✏️</button>}
+                        {!isReadOnly && r.statut==="créé" && <button onClick={()=>{setDecisionId(r.id);setDecisionType("validé");setDecisionDate(new Date().toISOString().slice(0,10));}} className="text-emerald-600 hover:text-emerald-800 text-xs font-semibold">Décision</button>}
+                        {!isReadOnly && r.statut==="validé" && <button onClick={()=>openPaiement(r)} className="text-violet-600 hover:text-violet-800 text-xs font-semibold">💰 Payer</button>}
                         {(r.statut==="créé") && <button onClick={()=>setPrintDoc({type:"devis",devis:r})} className="text-gray-400 hover:text-gray-600" title="Imprimer devis">🖨️</button>}
                         {r.statut==="payé" && <button onClick={()=>setPrintDoc({type:"facture",devis:r})} className="text-gray-400 hover:text-gray-600" title="Imprimer facture">🖨️</button>}
-                        <button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600">✕</button>
+                        {!isReadOnly && <button onClick={()=>setConfirmId(r.id)} className="text-rose-400 hover:text-rose-600">✕</button>}
                       </td>
                     </tr>
                   ))}
@@ -2043,9 +2182,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   <span className="text-gray-500 w-14">{s.unite}</span>
                   {isOpt2Locked
                     ? <span className="w-32 text-right text-xs font-semibold text-gray-400" title="Calculé : Option 1 + coût de l'extra">{s.tarif.toFixed(2)}€ <span className="italic">(calculé 🔒)</span></span>
-                    : <input type="number" min="0" step="0.5" value={s.tarif} onChange={e=>{ const v=parseFloat(e.target.value)||0; const upd=services.map(x=>x.id===s.id?{...x,tarif:v}:x); setServices(upd); saveServicesPrivat(cafe,upd); }} className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-right text-xs font-semibold text-violet-700"/>}
+                    : <input type="number" min={s.id==="personnel2" ? coutExtra : 0} step="0.5" value={s.tarif} disabled={isReadOnly} onChange={e=>{ let v=parseFloat(e.target.value)||0; if(s.id==="personnel2" && v<(parseFloat(coutExtra)||0)) v=parseFloat(coutExtra)||0; const upd=services.map(x=>x.id===s.id?{...x,tarif:v}:x); setServices(upd); saveServicesPrivat(cafe,upd); }} className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-right text-xs font-semibold text-violet-700 disabled:bg-gray-100 disabled:text-gray-400"/>}
                   {!isOpt2Locked && <span className="text-gray-400">€</span>}
-                  {s.type==="conso" && <button onClick={()=>delService(s.id)} className="text-rose-400 hover:text-rose-600 ml-1">✕</button>}
+                  {s.type==="conso" && !isReadOnly && <button onClick={()=>delService(s.id)} className="text-rose-400 hover:text-rose-600 ml-1">✕</button>}
                 </div>
               );})}
             </div>
@@ -2053,9 +2192,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <input placeholder="Nouvelle consommation…" value={newServiceForm.label} onChange={e=>setNewServiceForm(f=>({...f,label:e.target.value}))} className="flex-1 min-w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
               <input placeholder="unité" value={newServiceForm.unite} onChange={e=>setNewServiceForm(f=>({...f,unite:e.target.value}))} className="w-20 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
               <input type="number" placeholder="Tarif €" value={newServiceForm.tarif} onChange={e=>setNewServiceForm(f=>({...f,tarif:e.target.value}))} className="w-24 border border-gray-200 rounded-lg px-2 py-2 text-sm"/>
-              <button onClick={addService} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Ajouter</button>
+              <button onClick={addService} disabled={isReadOnly} className="bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-semibold">Ajouter</button>
             </div>
-            <p className="text-xs text-gray-400 mt-2">Le coût horaire de l'extra (Option 2) reste paramétré par le service Finance, dans Administration.</p>
+            <p className="text-xs text-gray-400 mt-2">Le coût horaire de l'extra (Option 2) reste paramétré par le service Finance, dans Administration. Le tarif du 2ème personnel ne peut pas être inférieur à ce coût horaire ({(parseFloat(coutExtra)||0).toFixed(2)}€).</p>
           </div>
         </div>
       );
@@ -2065,8 +2204,22 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     const Dashboard = ({ cafe, rcOn=false, refreshTick=0 }) => {
       const [allData,setAllData]=useState({caisseta:[],tcam:[],dons:[],achats:[],privatisation:[],adhesion:[],adherents:[],restocollective:[]}); const [loading,setLoading]=useState(true);
       const [ft,setFt]=useState("week"); const [sw,setSw]=useState(getCurrentWeekLabel); const [sm,setSm]=useState(new Date().getMonth()+1);
+      const anneesDisponiblesDash = [...new Set([
+        ...allData.caisseta.map(r=>r.date?.slice(0,4)),
+        ...allData.tcam.map(r=>r.date?.slice(0,4)),
+        ...allData.dons.map(r=>r.date?.slice(0,4)),
+        ...allData.achats.map(r=>r.date?.slice(0,4)),
+        ...allData.privatisation.map(r=>r.date_evenement?.slice(0,4)),
+        ...allData.restocollective.map(r=>r.date?.slice(0,4)),
+        ...allData.adhesion.map(r=>r.annee?String(r.annee):null),
+      ].filter(Boolean))].sort((a,b)=>b-a);
+      const [anneeDash,setAnneeDash]=useState("");
+      useEffect(()=>{ if(!anneeDash && anneesDisponiblesDash.length) setAnneeDash(String(anneesDisponiblesDash[0])); },[anneesDisponiblesDash.join(",")]);
       useEffect(()=>{ (async()=>{ setLoading(true); const [caisseta,tcam,dons,achats,privatisation,adherents,restocollective]=await Promise.all([loadData(cafe,"caisseta"),loadData(cafe,"tcam"),loadData(cafe,"dons"),loadData(cafe,"achats"),loadData(cafe,"privatisation"),loadData(cafe,"adherents"),loadData(cafe,"restocollective")]); const adhesion=deriveAdhesionAgg(adherents||[]); setAllData({caisseta,tcam,dons,achats,privatisation,adhesion,adherents,restocollective}); setLoading(false); })(); },[cafe, refreshTick]);
-      const fil=useCallback((arr)=>{ if(ft==="week")return arr.filter(r=>r.semaine===sw); if(ft==="month")return arr.filter(r=>r.mois===sm); return arr; },[ft,sw,sm]);
+      const fil=useCallback((arr)=>{
+        const parAnnee = anneeDash ? arr.filter(r=>{ const d = r.annee ? String(r.annee) : (r.date||r.date_evenement)?.slice(0,4); return d===anneeDash; }) : arr;
+        if(ft==="week")return parAnnee.filter(r=>r.semaine===sw); if(ft==="month")return parAnnee.filter(r=>r.mois===sm); if(ft==="year")return parAnnee; return parAnnee;
+      },[ft,sw,sm,anneeDash]);
       const sum=(arr,k="prix_total")=>arr.reduce((s,r)=>s+(parseFloat(r[k])||0),0);
       const fTA=fil(allData.caisseta),fTCAM=fil(allData.tcam),fD=fil(allData.dons),fA=fil(allData.achats),fP=fil(allData.privatisation),fADH=fil(allData.adhesion),fRC=fil(allData.restocollective);
       const tTA=sum(fTA),tTCAM=sum(fTCAM,"montant"),tD=sum(fD,"montant"),tA=sum(fA,"montant"),tP=sum(fP,"montant_facture"),tADH=sum(fADH,"total"),tRC=sum(fRC,"prix_total");
@@ -2077,8 +2230,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       return (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex flex-wrap gap-3 items-center justify-between">
-            <div className="flex gap-2 flex-wrap">
-              {["week","month","all"].map(x=><button key={x} onClick={()=>setFt(x)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${ft===x?"bg-emerald-500 text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{x==="week"?"Semaine":x==="month"?"Mois":"Tout"}</button>)}
+            <div className="flex gap-2 flex-wrap items-center">
+              {anneesDisponiblesDash.length>0 && <select value={anneeDash} onChange={e=>setAnneeDash(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300">{anneesDisponiblesDash.map(a=><option key={a} value={a}>{a}</option>)}</select>}
+              {["week","month","year","all"].map(x=><button key={x} onClick={()=>setFt(x)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${ft===x?"bg-emerald-500 text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{x==="week"?"Semaine":x==="month"?"Mois":x==="year"?"Année":"Tout"}</button>)}
               {ft==="week"&&<select value={sw} onChange={e=>setSw(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300">{WEEKS_2026.map(w=><option key={w.label} value={w.label}>{w.label} ({w.start.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})} → {w.end.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})})</option>)}</select>}
               {ft==="month"&&<select value={sm} onChange={e=>setSm(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300">{MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>}
             </div>
@@ -2093,7 +2247,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             <StatCard label="Total TCAM" value={`${tTCAM.toFixed(2)} €`} sub={`${fTCAM.length} lignes`} color="amber"/>
             <StatCard label="Total Dons" value={`${tD.toFixed(2)} €`} sub={`${fD.length} dons`} color="rose"/>
             <StatCard label="Total Achats" value={`${tA.toFixed(2)} €`} sub={`${fA.length} achats`} color="sky"/>
-            <StatCard label="Privatisations" value={`${tP.toFixed(2)} €`} sub={`${fP.length} événements`} color="violet"/>
+            <StatCard label="Privatisations" value={`${tP.toFixed(2)} €`} sub={`${fP.filter(r=>r.type_paiement!=="acompte").length} événements`} color="violet"/>
             <StatCard label="Adhésions" value={`${tADH.toFixed(2)} €`} sub={`${fADH.length} saisies`} color="violet"/>
             {(rcOn||tRC>0)&&<StatCard label="Resto Collective" value={`${tRC.toFixed(2)} €`} sub={`${fRC.length} lignes (TTC)`} color="amber"/>}
             <StatCard label="Total encaissé" value={`${(tTA+tTCAM+tD+tP+tADH+tRC).toFixed(2)} €`} sub="TA + TCAM + Dons + Privat. + Adh. + RC" color="emerald"/>
@@ -2223,7 +2377,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
           {/* ── SYNTHÈSE ADHÉRENTS ── */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-5 py-3 bg-gray-50 border-b border-gray-100"><h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par mois 2026</h4></div>
+            <div className="px-5 py-3 bg-gray-50 border-b border-gray-100"><h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par mois {anneeDash||"—"}</h4></div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead><tr className="bg-gray-50 border-b border-gray-100">
@@ -2233,7 +2387,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 </tr></thead>
                 <tbody>
                   {(()=>{
-                    const adherents = allData.adherents||[];
+                    const adherents = (allData.adherents||[]).filter(a=>!anneeDash || String(parseInt(a.annee_adhesion))===String(anneeDash));
                     const byMonthAdh = (arr, fn) => MONTHS.map((_,i)=>{ const mAdh=arr.filter(a=>getMonthForDate(a.date_adhesion)===i+1); return fn(mAdh); });
                     const indiv = adherents.filter(a=>!a.structure);
                     const struc = adherents.filter(a=>a.structure);
@@ -2245,12 +2399,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                     blocs.forEach(b=>{
                       const totalM   = byMonthAdh(b.data, m=>m.length);
                       const nouveauxM = byMonthAdh(b.data, m=>m.filter(a=>!a.renouvellement).length);
-                      // Montant total CLASSIQUE : exclut les adhésions offertes
-                      const montantM  = byMonthAdh(b.data, m=>m.reduce((s,a)=>s+(a.adhesion_offerte?0:(parseFloat(a.montant)||0)),0));
-                      // Montant total INCLUANT les adhésions offertes
+                      // Montant "classique" : EXCLUT les adhésions offertes (déjà comptabilisées en Dons, éviter le double-comptage en recette)
+                      const montantM  = byMonthAdh(b.data, m=>m.filter(a=>!a.adhesion_offerte).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                      // Montant "incluant offertes" : INCLUT les adhésions offertes — sert uniquement au calcul du montant moyen
                       const montantInclM = byMonthAdh(b.data, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
-                      const totTotal=totalM.reduce((a,c)=>a+c,0), totNouveaux=nouveauxM.reduce((a,c)=>a+c,0);
-                      const totMontant=montantM.reduce((a,c)=>a+c,0), totMontantIncl=montantInclM.reduce((a,c)=>a+c,0);
+                      const totTotal=totalM.reduce((a,c)=>a+c,0), totNouveaux=nouveauxM.reduce((a,c)=>a+c,0), totMontant=montantM.reduce((a,c)=>a+c,0), totMontantIncl=montantInclM.reduce((a,c)=>a+c,0);
                       rows.push(<tr key={b.label+"_tot"} className="border-t-2 border-gray-100 hover:bg-gray-50">
                         <td className={`px-3 py-2 font-semibold ${b.color}`}>{b.label} — Nb total</td>
                         {totalM.map((v,i)=><td key={i} className={`px-2 py-2 text-right ${b.colorV}`}>{v||"—"}</td>)}
@@ -2267,11 +2420,10 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                         <td className="px-3 py-2 text-right font-semibold text-gray-700">{totMontant.toFixed(0)}€</td>
                       </tr>);
                       rows.push(<tr key={b.label+"_mti"} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="px-3 py-2 text-gray-500">{b.label} — Montant total incl. offertes (€)</td>
+                        <td className="px-3 py-2 text-gray-400">{b.label} — Montant total incl. offertes (€)</td>
                         {montantInclM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-400">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
-                        <td className="px-3 py-2 text-right font-semibold text-gray-600">{totMontantIncl.toFixed(0)}€</td>
+                        <td className="px-3 py-2 text-right font-medium text-gray-500">{totMontantIncl.toFixed(0)}€</td>
                       </tr>);
-                      // Montant moyen = montant incluant offertes / nb total adhésions (inclut donc bien les offertes)
                       const moyenneM = montantInclM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
                       const moyenneTot = totTotal>0?totMontantIncl/totTotal:0;
                       rows.push(<tr key={b.label+"_avg"} className="border-b border-gray-100 hover:bg-gray-50 italic">
@@ -2283,8 +2435,8 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                     // Totaux combinés (individuelles + structures)
                     const totalAllM   = byMonthAdh(adherents, m=>m.length);
                     const nouveauxAllM = byMonthAdh(adherents, m=>m.filter(a=>!a.renouvellement).length);
-                    const montantAllM  = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(a.adhesion_offerte?0:(parseFloat(a.montant)||0)),0));
-                    const montantAllInclM = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                    const montantAllM  = byMonthAdh(adherents, m=>m.filter(a=>!a.adhesion_offerte).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                    const montantInclAllM = byMonthAdh(adherents, m=>m.reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
                     rows.push(<tr key="tot_total" className="border-t-2 border-gray-200 bg-gray-50 hover:bg-gray-100">
                       <td className="px-3 py-2 font-bold text-gray-800">TOUS — Nb total adhérents</td>
                       {totalAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-800">{v||"—"}</td>)}
@@ -2301,12 +2453,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       <td className="px-3 py-2 text-right font-extrabold text-gray-900">{montantAllM.reduce((a,b)=>a+b,0).toFixed(0)}€</td>
                     </tr>);
                     rows.push(<tr key="tot_mti" className="bg-gray-50 hover:bg-gray-100">
-                      <td className="px-3 py-2 font-semibold text-gray-700">TOUS — Montant total incl. offertes (€)</td>
-                      {montantAllInclM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-700">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
-                      <td className="px-3 py-2 text-right font-bold text-gray-800">{montantAllInclM.reduce((a,b)=>a+b,0).toFixed(0)}€</td>
+                      <td className="px-3 py-2 font-bold text-gray-600">TOUS — Montant total incl. offertes (€)</td>
+                      {montantInclAllM.map((v,i)=><td key={i} className="px-2 py-2 text-right font-medium text-gray-600">{v>0?`${v.toFixed(0)}€`:"—"}</td>)}
+                      <td className="px-3 py-2 text-right font-extrabold text-gray-700">{montantInclAllM.reduce((a,b)=>a+b,0).toFixed(0)}€</td>
                     </tr>);
-                    const moyenneAllM = montantAllInclM.map((v,i)=>totalAllM[i]>0?v/totalAllM[i]:0);
-                    const totAllTotal = totalAllM.reduce((a,b)=>a+b,0), totAllMontantIncl = montantAllInclM.reduce((a,b)=>a+b,0);
+                    const moyenneAllM = montantInclAllM.map((v,i)=>totalAllM[i]>0?v/totalAllM[i]:0);
+                    const totAllTotal = totalAllM.reduce((a,b)=>a+b,0), totAllMontantIncl = montantInclAllM.reduce((a,b)=>a+b,0);
                     const moyenneAllTot = totAllTotal>0?totAllMontantIncl/totAllTotal:0;
                     rows.push(<tr key="tot_avg" className="bg-gray-50 hover:bg-gray-100 italic">
                       <td className="px-3 py-2 font-medium text-gray-600">TOUS — Montant moyen (€)</td>
@@ -2325,7 +2477,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
     /* ── SECTION CARTE ── */
     const TYPES_PRODUIT = ["Soft","Alcool","Snacking","Resto Coll."];
-    const SectionCarte = ({ cafe, carte, setCarte }) => {
+    const SectionCarte = ({ cafe, carte, setCarte, isReadOnly=false }) => {
       const [tvaOptions,setTvaOptions] = useState(()=>loadTVACarte());
       useEffect(()=>{
         const h=()=>setTvaOptions(loadTVACarte());
@@ -2334,6 +2486,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       },[]);
       const [f,setF]=useState({label:"",prix:"",type:"Soft",tva_taux:"0"}); const [editId,setEditId]=useState(null); const [ef,setEf]=useState({});
       const save=async(upd)=>{
+        if(isReadOnly)return;
         setCarte(upd);
         await saveData(cafe,"carte",upd);
       };
@@ -2355,7 +2508,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               {f.type==="Resto Coll."&&<div><label className="text-xs text-gray-500 block mb-1">Type TVA</label><select value={f.rcType||"Snacking"} onChange={e=>setF(x=>({...x,rcType:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"><option value="0">0%</option><option value="5.5">5,5%</option><option value="10">10%</option><option value="20">20%</option></select></div>}
               <div><label className="text-xs text-gray-500 block mb-1">TVA</label><select value={f.tva_taux||"0"} onChange={e=>setF(x=>({...x,tva_taux:e.target.value}))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{tvaOptions.map(t=><option key={t} value={t}>{t}%</option>)}</select></div>
               {f.prix&&parseFloat(f.prix)>0&&<div className="text-xs text-gray-500 pt-4">HT : <strong>{calcHT(parseFloat(f.prix),f.tva_taux||"0").toFixed(2)} €</strong></div>}
-              <button onClick={add} className="bg-gray-800 hover:bg-gray-900 text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">+ Ajouter</button>
+              <button onClick={add} disabled={isReadOnly} className="bg-gray-800 hover:bg-gray-900 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">+ Ajouter</button>
             </div>
           </div>
           {grouped.map(({type,items})=>(
@@ -2421,7 +2574,24 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       // Fonctions utilitaires — définies EN PREMIER
       const n = v => (typeof v==="number" && isFinite(v)) ? v : 0;
       const safeArr = a => Array.isArray(a) ? a : [];
-      const fil=useCallback((arr)=>{ if(ft==="week")return arr.filter(r=>r.semaine===sw); if(ft==="month")return arr.filter(r=>r.mois===sm); return arr; },[ft,sw,sm]);
+      const anneesDisponiblesDash = [...new Set(cafes.flatMap(c=>{
+        const d = allCafesData[c]||{};
+        return [
+          ...safeArr(d.caisseta).map(r=>r.date?.slice(0,4)),
+          ...safeArr(d.tcam).map(r=>r.date?.slice(0,4)),
+          ...safeArr(d.dons).map(r=>r.date?.slice(0,4)),
+          ...safeArr(d.achats).map(r=>r.date?.slice(0,4)),
+          ...safeArr(d.privatisation).map(r=>r.date_evenement?.slice(0,4)),
+          ...safeArr(d.restocollective).map(r=>r.date?.slice(0,4)),
+          ...safeArr(d.adhesion).map(r=>r.annee?String(r.annee):null),
+        ];
+      }).filter(Boolean))].sort((a,b)=>b-a);
+      const [anneeDash,setAnneeDash]=useState("");
+      useEffect(()=>{ if(!anneeDash && anneesDisponiblesDash.length) setAnneeDash(String(anneesDisponiblesDash[0])); },[anneesDisponiblesDash.join(",")]);
+      const fil=useCallback((arr)=>{
+        const parAnnee = anneeDash ? safeArr(arr).filter(r=>{ const d = r.annee ? String(r.annee) : (r.date||r.date_evenement)?.slice(0,4); return d===anneeDash; }) : safeArr(arr);
+        if(ft==="week")return parAnnee.filter(r=>r.semaine===sw); if(ft==="month")return parAnnee.filter(r=>r.mois===sm); return parAnnee;
+      },[ft,sw,sm,anneeDash]);
       const sum=(arr,k="prix_total")=>{ const r=safeArr(arr).reduce((s,r)=>s+(parseFloat(r[k])||0),0); return isFinite(r)?r:0; };
 
       // Guard : afficher spinner si données pas encore chargées — AVANT tout calcul
@@ -2468,8 +2638,9 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
           {subTab==="admin"&&isAdmin?<AdminPanel cafes={cafes} onCafeCreated={onCafeCreated} supaStatus={supaStatus}/>:<>
             {/* filtres */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex flex-wrap gap-3 items-center justify-between">
-              <div className="flex gap-2 flex-wrap">
-                {["week","month","all"].map(x=><button key={x} onClick={()=>setFt(x)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${ft===x?"bg-gray-800 text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{x==="week"?"Semaine":x==="month"?"Mois":"Tout"}</button>)}
+              <div className="flex gap-2 flex-wrap items-center">
+                {anneesDisponiblesDash.length>0 && <select value={anneeDash} onChange={e=>setAnneeDash(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{anneesDisponiblesDash.map(a=><option key={a} value={a}>{a}</option>)}</select>}
+                {["week","month","year","all"].map(x=><button key={x} onClick={()=>setFt(x)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${ft===x?"bg-gray-800 text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{x==="week"?"Semaine":x==="month"?"Mois":x==="year"?"Année":"Tout"}</button>)}
                 {ft==="week"&&<select value={sw} onChange={e=>setSw(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{WEEKS_2026.map(w=><option key={w.label} value={w.label}>{w.label} ({w.start.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})} → {w.end.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})})</option>)}</select>}
                 {ft==="month"&&<select value={sm} onChange={e=>setSm(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300">{MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>}
               </div>
@@ -2602,7 +2773,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             {/* ── SYNTHÈSE ADHÉRENTS — TOUS CAFÉS (regroupé par café) ── */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
-                <h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par café et par mois 2026</h4>
+                <h4 className="text-sm font-semibold text-gray-700">💛 Adhérents par café et par mois {anneeDash||"—"}</h4>
                 <div className="flex gap-1.5">
                   {[["all","Tous"],["indiv","Individuelles"],["struc","Structures"]].map(([v,lbl])=>(
                     <button key={v} onClick={()=>setAdhFilter(v)} className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${adhFilter===v?"bg-violet-500 text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{lbl}</button>
@@ -2613,27 +2784,27 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 const moisSel = [...Array(12).keys()].map(i=>i+1);
                 const perCafeMonth = cafes.map(c=>{
                   let adherents = (allCafesData[c]||{}).adherents||[];
+                  adherents = adherents.filter(a=>!anneeDash || String(parseInt(a.annee_adhesion))===String(anneeDash));
                   if (adhFilter==="indiv") adherents = adherents.filter(a=>!a.structure);
                   if (adhFilter==="struc") adherents = adherents.filter(a=>a.structure);
                   const totalM   = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).length);
                   const nouveauxM = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m && !a.renouvellement).length);
-                  // Montant total CLASSIQUE : exclut les adhésions offertes
-                  const montantM  = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(a.adhesion_offerte?0:(parseFloat(a.montant)||0)),0));
-                  // Montant total INCLUANT les adhésions offertes
+                  // Montant "classique" : EXCLUT les adhésions offertes (déjà comptabilisées en Dons, éviter le double-comptage en recette)
+                  const montantM  = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m && !a.adhesion_offerte).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
+                  // Montant "incluant offertes" : sert uniquement au calcul du montant moyen
                   const montantInclM = moisSel.map(m=>adherents.filter(a=>getMonthForDate(a.date_adhesion)===m).reduce((s,a)=>s+(parseFloat(a.montant)||0),0));
-                  const totTotal = totalM.reduce((a,b)=>a+b,0), totNouveaux = nouveauxM.reduce((a,b)=>a+b,0);
-                  const totMontant = montantM.reduce((a,b)=>a+b,0), totMontantIncl = montantInclM.reduce((a,b)=>a+b,0);
-                  // Montant moyen = incluant offertes / nb total adhésions
+                  const totTotal = totalM.reduce((a,b)=>a+b,0), totNouveaux = nouveauxM.reduce((a,b)=>a+b,0), totMontant = montantM.reduce((a,b)=>a+b,0), totMontantIncl = montantInclM.reduce((a,b)=>a+b,0);
                   const moyenneM = montantInclM.map((v,i)=>totalM[i]>0?v/totalM[i]:0);
                   const moyenneTot = totTotal>0?totMontantIncl/totTotal:0;
                   return { cafe:c, totalM, nouveauxM, montantM, montantInclM, moyenneM, moyenneTot,
                     totTotal, totNouveaux, totMontant, totMontantIncl };
                 });
                 const sumCol = (key) => moisSel.map((_,i)=>perCafeMonth.reduce((s,c)=>s+c[key][i],0));
-                const sumTotalM = sumCol("totalM"), sumNouveauxM = sumCol("nouveauxM"), sumMontantM = sumCol("montantM");
+                const sumTotalM = sumCol("totalM"), sumNouveauxM = sumCol("nouveauxM"), sumMontantM = sumCol("montantM"), sumMontantInclM = sumCol("montantInclM");
                 const grandTotal = perCafeMonth.reduce((s,c)=>s+c.totTotal,0);
                 const grandNouveaux = perCafeMonth.reduce((s,c)=>s+c.totNouveaux,0);
                 const grandMontant = perCafeMonth.reduce((s,c)=>s+c.totMontant,0);
+                const grandMontantIncl = perCafeMonth.reduce((s,c)=>s+c.totMontantIncl,0);
                 const fmtN = (v) => v||"—";
                 const fmtE = (v) => v>0?`${v.toFixed(0)}€`:"—";
                 const fmtE2 = (v) => v>0?`${v.toFixed(2)}€`:"—";
@@ -2671,14 +2842,14 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                               <td className="px-3 py-2 text-right font-bold text-sky-700">{c.totNouveaux}</td>
                             </tr>
                             <tr className="hover:bg-gray-50">
-                              <td className="px-3 py-2 text-gray-600">Montant total (€)</td>
+                              <td className="px-3 py-2 text-gray-600">Montant total adhésions (€)</td>
                               {c.montantM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-700">{fmtE(v)}</td>)}
                               <td className="px-3 py-2 text-right font-bold text-gray-800">{fmtE(c.totMontant)}</td>
                             </tr>
                             <tr className="hover:bg-gray-50">
                               <td className="px-3 py-2 text-gray-500">Montant total incl. offertes (€)</td>
-                              {c.montantInclM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-600">{fmtE(v)}</td>)}
-                              <td className="px-3 py-2 text-right font-semibold text-gray-700">{fmtE(c.totMontantIncl)}</td>
+                              {c.montantInclM.map((v,i)=><td key={i} className="px-2 py-2 text-right text-gray-500">{fmtE(v)}</td>)}
+                              <td className="px-3 py-2 text-right font-semibold text-gray-600">{fmtE(c.totMontantIncl)}</td>
                             </tr>
                             <tr className="border-b border-gray-100 hover:bg-gray-50 italic">
                               <td className="px-3 py-2 text-gray-400">Montant moyen (€)</td>
@@ -2701,7 +2872,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     /* ── SECTION ADHÉSION ── */
     const MODES_ADH = ["Espèces","CB","Chèque","Virement","Prélèvement"];
     const ROLES_ADDITIONNELS = ["Bénévole","Talentueux","Tisseur de lien"];
-    const SOURCES_ARRIVEE = ["flyer / magazine","en passant / vitrine","bouche à oreille","réseaux sociaux"];
+    const SOURCES_ARRIVEE = ["flyer / magazine","en passant / vitrine","bouche à oreille","réseaux sociaux","Daddy&Vous"];
 
     // Année d'adhésion par défaut : année en cours (jan-nov), année suivante en décembre
     const defaultAnneeAdhesion = () => { const d=new Date(); return d.getMonth()===11 ? d.getFullYear()+1 : d.getFullYear(); };
@@ -2754,7 +2925,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     // Catalogue de services — par café (cafe=<nom café>, section="services_privatisation")
     const SERVICES_PRIVAT_DEFAULT = [
       {id:"opt1", groupe:"Option 1 : Privatisation simple des locaux", label:"Privatisation des locaux (écran, enceinte, kit karaoké)", unite:"h", tarif:30, type:"option1"},
-      {id:"droit_bouchon", groupe:"Option 1 : Privatisation simple des locaux", label:"Droit de bouchon", unite:"pers.", tarif:3, type:"normal"},
+      {id:"droit_bouchon", groupe:"Option 1 : Privatisation simple des locaux", label:"Droit de bouchon", unite:"unité", tarif:3, type:"normal"},
       {id:"opt2", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"Privatisation des locaux + Équipe (1 pers.) + bar ouvert", unite:"h", tarif:60, type:"option2"}, // tarif ignoré en pratique — toujours recalculé via getServicesAvecCalcul (Option 1 + coût de l'extra)
       {id:"personnel2", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"2ème personnel", unite:"h", tarif:30, type:"normal"},
       {id:"conso_convive", groupe:"Option 2 : Forfait privatisation complète (avec Personnel et Conso.)", label:"1 conso. par convive", unite:"pers.", tarif:3, type:"normal"},
@@ -2842,6 +3013,10 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       montant_facture: 0,
       mode: "",
       date_reglement: "",
+      // Acompte (premier paiement, avant facturation finale)
+      acompte_montant: "",
+      acompte_mode: "Chèque",
+      acompte_date_paiement: new Date().toISOString().slice(0,10),
       // Champs hérités (compatibilité CSV)
       client: "",
       montant_devis_legacy: 0,
@@ -2857,6 +3032,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       contact_nom: "",
       adresse: "",
       code_postal: "",
+      ville: "",
       mail: "",
       telephone: "",
       date_naissance: "",
@@ -2867,9 +3043,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       renouvellement: false,
       reseaux: [],
       de_passage: false,
+      resident: false,
       source_arrivee: "",
       mode_reglement: "CB",
       roles_additionnels: [],   // [{role, date_formation, date_debut, date_fin}]
+      interets: [],   // [role, ...] — intérêt exprimé, sans dates (distinct d'un rôle actif)
       talents: "",
     });
 
@@ -2885,16 +3063,18 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const bySemaine = {};
       adherents.forEach(a => {
         const sem = getWeekForDate(a.date_adhesion) || "";
-        if (!bySemaine[sem]) {
-          bySemaine[sem] = { semaine: sem, mois: getMonthForDate(a.date_adhesion), total: 0 };
-          MODES_ADH.forEach(m => { bySemaine[sem][`indiv_${m}`]=0; bySemaine[sem][`struc_${m}`]=0; });
+        const annee = parseInt((a.date_adhesion||"").slice(0,4)) || null;
+        const cle = `${annee}_${sem}`; // évite qu'une même semaine (S12) de deux années différentes ne fusionne
+        if (!bySemaine[cle]) {
+          bySemaine[cle] = { semaine: sem, mois: getMonthForDate(a.date_adhesion), annee, total: 0 };
+          MODES_ADH.forEach(m => { bySemaine[cle][`indiv_${m}`]=0; bySemaine[cle][`struc_${m}`]=0; });
         }
         const montant = parseFloat(a.montant) || 0;
         // Une adhésion offerte (don>50€) est exclue du total adhésions mais incluse dans le total "incluant offertes"
         if (!a.adhesion_offerte) {
           const pfx = a.structure ? "struc" : "indiv";
-          bySemaine[sem][`${pfx}_${a.mode_reglement}`] = (bySemaine[sem][`${pfx}_${a.mode_reglement}`]||0) + montant;
-          bySemaine[sem].total += montant;
+          bySemaine[cle][`${pfx}_${a.mode_reglement}`] = (bySemaine[cle][`${pfx}_${a.mode_reglement}`]||0) + montant;
+          bySemaine[cle].total += montant;
         }
       });
       return Object.values(bySemaine);
@@ -2905,16 +3085,22 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       struc_Espèces:"", struc_CB:"", struc_Chèque:"", struc_Virement:"", struc_Prélèvement:"",
     });
 
-    const SectionAdhesion = ({ cafe, refreshTick=0, cafes=[] }) => {
+    const SectionAdhesion = ({ cafe, refreshTick=0, cafes=[], isReadOnly=false, by="" }) => {
       const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
       const [form,setForm]=useState(()=>({...mkAdherentForm(), cafe}));
       const [editId,setEditId]=useState(null);
       const [reseaux,setReseaux]=useState([]);
       const [filters,setFilters]=useState({});
+      const [anneeFiltre,setAnneeFiltre]=useState("");
       const [sortCol,setSortCol]=useState(null);
       const [sortDir,setSortDir]=useState("asc"); // "asc" | "desc"
       const [dupAlert,setDupAlert]=useState(null); // { matches:[...], pendingForm }
       const [telConfirm,setTelConfirm]=useState(false); // true = utilisateur a confirmé un numéro non FR
+      const [anneeConfirm,setAnneeConfirm]=useState(false); // true = utilisateur a confirmé une année d'adhésion inhabituelle
+      const [printDoc,setPrintDoc]=useState(null); // adhérent dont on affiche le justificatif d'adhésion/paiement
+      const [entete,setEntete]=useState({}); // en-tête café (adresse, SIRET) — géré dans Administration
+
+      useEffect(()=>{ loadEntetesPrivat().then(all=>setEntete(all[cafe]||{})); },[cafe]);
 
       useEffect(()=>{
         setLoading(true);
@@ -2929,7 +3115,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         return()=>window.removeEventListener("reseaux_updated",h);
       },[]);
 
-      const resetForm = () => { setForm({...mkAdherentForm(), cafe}); setEditId(null); setTelConfirm(false); };
+      const resetForm = () => { setForm({...mkAdherentForm(), cafe}); setEditId(null); setTelConfirm(false); setAnneeConfirm(false); };
 
       // ── Dédoublonnage ──
       const norm = (s) => (s||"").trim().toLowerCase();
@@ -2945,32 +3131,34 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       };
 
       const doSave = async (f, allRows) => {
-        const isCreation = !f.id; // distingue création / modification — le don n'est généré qu'à la création
-        const nr = { ...f, id: f.id || Date.now(), created_at: f.created_at || localDateTime() };
+        if (isReadOnly) return;
+        const isCreation = !f.id;
+        const nr = { ...f, id: f.id || Date.now(), created_at: f.created_at || localDateTime(), by: f.by || by };
         const upd = f.id ? allRows.map(r=>r.id===f.id?nr:r) : [nr, ...allRows];
         setRows(upd); setLoading(false);
         await saveData(cafe,"adherents",upd);
-
-        // Adhésion offerte : génère automatiquement la ligne Don correspondante (uniquement à la création)
-        if (isCreation && nr.adhesion_offerte && parseFloat(nr.montant) > 0) {
-          const nomComplet = nr.structure ? (nr.nom||"").trim() : `${nr.prenom||""} ${(nr.nom||"").toUpperCase()}`.trim();
-          const donRows = await loadData(cafe, "dons");
+        // Adhésion offerte : génère automatiquement un don du même montant, uniquement à la création
+        // (jamais lors d'une modification ultérieure, pour ne pas dupliquer le don à chaque édition).
+        if (isCreation && nr.adhesion_offerte && (parseFloat(nr.montant)||0) > 0) {
+          const nomComplet = nr.structure ? (nr.nom_entreprise||nr.contact_nom||"") : `${nr.prenom||""} ${nr.nom?.toUpperCase()||""}`.trim();
           const donNr = {
-            id: Date.now()+1,
+            id: nr.id + 1,
             date: nr.date_adhesion,
             semaine: getWeekForDate(nr.date_adhesion),
             mois: getMonthForDate(nr.date_adhesion),
             produit: "Don",
-            montant: parseFloat(nr.montant) || 0,
+            montant: parseFloat(nr.montant)||0,
             mode: nr.mode_reglement,
             recu_fiscal: "non",
             commentaire: `adhésion offerte ${nomComplet}`,
             recorded_at: localDateTime(),
+            by,
           };
-          await saveData(cafe, "dons", [donNr, ...(donRows||[])]);
+          const donRows = await loadData(cafe,"dons");
+          await saveData(cafe,"dons",[donNr, ...(donRows||[])]);
         }
-
         resetForm();
+        if (nr.structure) setPrintDoc(nr);
       };
 
       const submit = async () => {
@@ -2980,22 +3168,42 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         if (form.structure && !form.adresse.trim()) { alert("L'adresse est obligatoire pour une structure."); return; }
         if (form.structure && !isValidEmail(form.mail)) { alert("Le mail est obligatoire pour une structure."); return; }
 
-        if (form.telephone.trim() && !isValidTelFR(form.telephone) && !telConfirm) {
-          if (!window.confirm(`Le numéro "${form.telephone}" ne ressemble pas à un numéro français standard.\n\nConfirmez-vous cette saisie (par exemple un numéro étranger) ?`)) return;
+        // Date d'adhésion vide (ex: fiche dupliquée pour renouvellement) -> date du jour par défaut
+        let f = form;
+        if (!f.date_adhesion) { f = {...f, date_adhesion: new Date().toISOString().slice(0,10)}; setForm(f); }
+
+        // Cohérence année d'adhésion / date du jour : OK si on est dans l'année N, ou en décembre de l'année N-1 (adhésions par anticipation)
+        const today = new Date();
+        const anneeN = parseInt(f.annee_adhesion);
+        const anneeOk = today.getFullYear()===anneeN || (today.getFullYear()===anneeN-1 && today.getMonth()===11);
+        if (!anneeOk && !anneeConfirm) {
+          if (!window.confirm(`L'année d'adhésion sélectionnée (${anneeN}) est inhabituelle par rapport à la date du jour (${today.toLocaleDateString("fr-FR")}).\n\nConfirmez-vous cette saisie ?`)) return;
+          setAnneeConfirm(true);
+        }
+
+        if (f.telephone.trim() && !isValidTelFR(f.telephone) && !telConfirm) {
+          if (!window.confirm(`Le numéro "${f.telephone}" ne ressemble pas à un numéro français standard.\n\nConfirmez-vous cette saisie (par exemple un numéro étranger) ?`)) return;
           setTelConfirm(true);
         }
 
-        const dups = findDuplicates(form, rows);
+        const dups = findDuplicates(f, rows);
         if (dups.length > 0 && !dupAlert) {
-          setDupAlert({ matches: dups, pendingForm: form });
+          setDupAlert({ matches: dups, pendingForm: f });
           return;
         }
         setDupAlert(null);
-        await doSave(form, rows);
+        await doSave(f, rows);
       };
 
       const editRow = (r) => { setForm(r); setEditId(r.id); window.scrollTo({top:0,behavior:"smooth"}); };
-      const delRow = async (id) => { if(!window.confirm("Confirmez-vous la suppression de cette fiche adhérent ?"))return; const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"adherents",u); };
+      const duplicateRow = (r) => {
+        if (isReadOnly) return;
+        const nextYear = (parseInt(r.annee_adhesion)||new Date().getFullYear()) + 1;
+        setForm({...r, id:null, annee_adhesion: nextYear, date_adhesion:"", renouvellement:true, created_at:null});
+        setEditId(null);
+        window.scrollTo({top:0,behavior:"smooth"});
+      };
+      const delRow = async (id) => { if(isReadOnly)return; if(!window.confirm("Confirmez-vous la suppression de cette fiche adhérent ?"))return; const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"adherents",u); };
 
       const toggleArr = (arr, val) => arr.includes(val) ? arr.filter(x=>x!==val) : [...arr, val];
       const toggleRole = (role) => {
@@ -3006,14 +3214,18 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         });
       };
       const updRole = (role, field, val) => setForm(f=>({...f, roles_additionnels: f.roles_additionnels.map(r=>r.role===role?{...r,[field]:val}:r)}));
+      const toggleInteret = (role) => setForm(f=>({...f, interets: toggleArr(f.interets||[], role)}));
 
       // ── Filtres sur toutes les colonnes ──
       const getRoleInfo = (r, roleName) => (r.roles_additionnels||[]).find(x=>x.role===roleName);
+      const anneesDisponiblesAdh = [...new Set(rows.map(r=>parseInt(r.annee_adhesion)).filter(Boolean))].sort((a,b)=>b-a);
+
       const filteredRows = rows.filter(r => {
+        if (anneeFiltre && parseInt(r.annee_adhesion)!==parseInt(anneeFiltre)) return false;
         return Object.entries(filters).every(([k,v]) => {
           if (!v) return true;
           if (k==="structure") return v==="oui" ? r.structure : !r.structure;
-          if (k==="renouvellement"||k==="de_passage"||k==="adhesion_offerte") return v==="oui" ? !!r[k] : !r[k];
+          if (k==="renouvellement"||k==="de_passage"||k==="adhesion_offerte"||k==="resident") return v==="oui" ? !!r[k] : !r[k];
           const val = r[k];
           return String(val??"").toLowerCase().includes(v.toLowerCase());
         });
@@ -3034,10 +3246,65 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
       if (loading) return <div className="p-8 text-center text-gray-400">Chargement...</div>;
 
+      // ── Impression justificatif d'adhésion et de paiement ──
+      if (printDoc) {
+        const d = printDoc;
+        const nomAffiche = d.structure ? (d.nom||"") : `${d.civilite||""} ${d.prenom||""} ${d.nom?.toUpperCase()||""}`.trim();
+        return (
+          <div className="space-y-4">
+            <div className="flex gap-2 print:hidden">
+              <button onClick={()=>window.print()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">🖨️ Imprimer / Enregistrer en PDF</button>
+              <button onClick={()=>setPrintDoc(null)} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors border border-gray-200">← Retour</button>
+            </div>
+            <div id="daddy-print-area" className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 max-w-2xl mx-auto print:shadow-none print:border-0 print:p-2 text-sm" style={{fontSize:"0.85rem"}}>
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h1 className="text-xl font-bold text-gray-800">JUSTIFICATIF D'ADHÉSION ET DE PAIEMENT</h1>
+                  <p className="text-xs text-gray-500 font-medium mt-1">Café Chez Daddy — {cafe}</p>
+                  {entete.adresse && <p className="text-xs text-gray-500">{entete.adresse}</p>}
+                  {entete.siret && <p className="text-xs text-gray-500">SIRET : {entete.siret}</p>}
+                  <p className="text-xs text-gray-500 mt-1">Émis le {new Date().toLocaleDateString("fr-FR")}</p>
+                </div>
+                <img src={LOGO_SRC} alt="Chez Daddy" className="h-14 w-auto"/>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6 mb-6">
+                <div>
+                  <p className="text-xs font-semibold text-gray-400 uppercase mb-1">{d.structure?"Structure":"Adhérent"}</p>
+                  <p className="font-semibold text-gray-800">{nomAffiche || "—"}</p>
+                  {d.structure && d.contact_nom && <p className="text-gray-600">Contact : {d.contact_nom}</p>}
+                  {d.adresse && <p className="text-gray-600">{d.adresse}</p>}
+                  {(d.code_postal || d.ville) && <p className="text-gray-600">{d.code_postal} {d.ville}</p>}
+                  {d.mail && <p className="text-gray-600">{d.mail}</p>}
+                  {d.telephone && <p className="text-gray-600">{d.telephone}</p>}
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-400 uppercase mb-1">Adhésion</p>
+                  <p className="text-gray-600">Année d'adhésion : <strong>{d.annee_adhesion}</strong></p>
+                  <p className="text-gray-600">Date d'adhésion : <strong>{d.date_adhesion}</strong></p>
+                  {d.renouvellement && <p className="text-gray-600">Renouvellement</p>}
+                </div>
+              </div>
+
+              <table className="w-full text-sm mb-6">
+                <thead><tr className="border-b border-gray-200 text-left text-gray-500"><th className="py-1.5">Détail</th><th className="py-1.5 text-right">Montant</th></tr></thead>
+                <tbody>
+                  <tr><td className="py-1.5">Cotisation d'adhésion {d.annee_adhesion}</td><td className="py-1.5 text-right">{d.adhesion_offerte ? "Offerte" : `${(parseFloat(d.montant)||0).toFixed(2)}€`}</td></tr>
+                  {!d.adhesion_offerte && <tr><td className="py-1.5 text-gray-500">Moyen de paiement</td><td className="py-1.5 text-right text-gray-500">{d.mode_reglement}</td></tr>}
+                  <tr className="border-t-2 border-gray-200"><td className="py-1.5 font-bold">TOTAL RÉGLÉ</td><td className="py-1.5 text-right font-bold text-base">{d.adhesion_offerte ? "0.00€ (offerte)" : `${(parseFloat(d.montant)||0).toFixed(2)}€`}</td></tr>
+                </tbody>
+              </table>
+
+              <p className="text-xs text-gray-500 italic">Ce document atteste de l'adhésion et, le cas échéant, du règlement de la cotisation à l'association Chez Daddy pour l'année {d.annee_adhesion}.</p>
+            </div>
+          </div>
+        );
+      }
+
       const COLS = [
         {k:"date_adhesion", label:"Date adh.", w:"w-24"},
         {k:"structure", label:"Structure", w:"w-20", type:"select", options:[["oui","Structure"],["non","Indiv."]]},
-        {k:"civilite", label:"Civ.", w:"w-16", type:"select", options:[["Mme","Mme"],["M.","M."]]},
+        {k:"civilite", label:"Civ.", w:"w-16", type:"select", options:[["Mme","Mme"],["M.","M."],["Autre","Autre"]]},
         {k:"prenom", label:"Prénom", w:"w-28", sortable:true},
         {k:"nom", label:"NOM", w:"w-28", sortable:true},
         {k:"contact_nom", label:"Contact", w:"w-28", sortable:true},
@@ -3054,10 +3321,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         {k:"renouvellement", label:"Renouv.", w:"w-20", type:"select", options:[["oui","Oui"],["non","Non"]]},
         {k:"reseaux", label:"Réseaux", w:"w-28"},
         {k:"de_passage", label:"Passage", w:"w-20", type:"select", options:[["oui","Oui"],["non","Non"]]},
+        {k:"resident", label:"Résident", w:"w-20", type:"select", options:[["oui","Oui"],["non","Non"]]},
         {k:"source_arrivee", label:"Source", w:"w-28", type:"select", options:SOURCES_ARRIVEE.map(s=>[s,s])},
         {k:"_role_benevole", label:"Bénévole", w:"w-24"},
         {k:"_role_talentueux", label:"Talentueux", w:"w-24"},
         {k:"_role_tisseur", label:"Tisseur lien", w:"w-24"},
+        {k:"_interets", label:"Intérêts", w:"w-32"},
         {k:"talents", label:"Talents", w:"w-32"},
         {k:"created_at", label:"Créé le", w:"w-28"},
       ];
@@ -3101,7 +3370,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <div><label className="text-xs text-gray-500 block mb-1">Date d'adhésion *</label><input type="date" value={form.date_adhesion} onChange={e=>setForm(f=>({...f,date_adhesion:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>
 
               {!form.structure && <>
-                <div><label className="text-xs text-gray-500 block mb-1">Civilité *</label><select value={form.civilite} onChange={e=>setForm(f=>({...f,civilite:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"><option>Mme</option><option>M.</option></select></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Civilité *</label><select value={form.civilite} onChange={e=>setForm(f=>({...f,civilite:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"><option>Mme</option><option>M.</option><option>Autre</option></select></div>
                 <div><label className="text-xs text-gray-500 block mb-1">Prénom *</label><input maxLength={50} value={form.prenom} onChange={e=>setForm(f=>({...f,prenom:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>
               </>}
 
@@ -3117,6 +3386,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               </div>
 
               <div>
+                <label className="text-xs text-gray-500 block mb-1">Ville</label>
+                <input maxLength={80} value={form.ville||""} onChange={e=>setForm(f=>({...f,ville:e.target.value}))} placeholder="Lyon" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
+              </div>
+
+              <div>
                 <label className="text-xs text-gray-500 block mb-1">Mail {form.structure?"*":"(facultatif)"}</label>
                 <input value={form.mail} onChange={e=>setForm(f=>({...f,mail:e.target.value}))} className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${!isValidEmail(form.mail)?"border-rose-300 focus:ring-rose-300":"border-gray-200 focus:ring-indigo-300"}`}/>
                 {!isValidEmail(form.mail) && <p className="text-xs text-rose-500 mt-0.5">Format mail invalide</p>}
@@ -3127,7 +3401,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
 
               {!form.structure && <div><label className="text-xs text-gray-500 block mb-1">Date de naissance *</label><input type="date" value={form.date_naissance} onChange={e=>setForm(f=>({...f,date_naissance:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>}
 
-              <div><label className="text-xs text-gray-500 block mb-1">Année d'adhésion *</label><input type="number" value={form.annee_adhesion} onChange={e=>setForm(f=>({...f,annee_adhesion:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>
+              <div><label className="text-xs text-gray-500 block mb-1">Année d'adhésion *</label><input type="number" value={form.annee_adhesion} onChange={e=>{setForm(f=>({...f,annee_adhesion:e.target.value}));setAnneeConfirm(false);}} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/></div>
 
               <div><label className="text-xs text-gray-500 block mb-1">Café *</label><select value={form.cafe} onChange={e=>setForm(f=>({...f,cafe:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">{cafes.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
 
@@ -3145,6 +3419,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
               <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"><input type="checkbox" checked={form.adhesion_offerte} onChange={e=>setForm(f=>({...f,adhesion_offerte:e.target.checked}))} className="w-4 h-4 accent-emerald-500"/>🎁 Adhésion offerte (don &gt; 50€)</label>
               <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"><input type="checkbox" checked={form.renouvellement} onChange={e=>setForm(f=>({...f,renouvellement:e.target.checked}))} className="w-4 h-4 accent-indigo-500"/>🔄 Renouvellement</label>
               {!form.structure && <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"><input type="checkbox" checked={form.de_passage} onChange={e=>setForm(f=>({...f,de_passage:e.target.checked}))} className="w-4 h-4 accent-gray-500"/>🚶 De passage</label>}
+              {!form.structure && <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"><input type="checkbox" checked={form.resident} onChange={e=>setForm(f=>({...f,resident:e.target.checked}))} className="w-4 h-4 accent-gray-500"/>🏠 Résident (café en maison)</label>}
             </div>
 
             {reseaux.length>0 && <div className="mb-4">
@@ -3161,7 +3436,10 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                   const active = form.roles_additionnels.find(r=>r.role===role);
                   return (
                     <div key={role} className="border border-gray-100 rounded-xl p-3">
-                      <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer mb-2"><input type="checkbox" checked={!!active} onChange={()=>toggleRole(role)} className="w-4 h-4 accent-violet-500"/>{role}</label>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"><input type="checkbox" checked={!!active} onChange={()=>toggleRole(role)} className="w-4 h-4 accent-violet-500"/>{role}</label>
+                        <label className="flex items-center gap-1.5 text-xs text-amber-700 cursor-pointer"><input type="checkbox" checked={(form.interets||[]).includes(role)} onChange={()=>toggleInteret(role)} className="w-3.5 h-3.5 accent-amber-500"/>Intéressé(e)</label>
+                      </div>
                       {active && <div className="grid grid-cols-3 gap-2 pl-6">
                         <div><label className="text-xs text-gray-400 block mb-0.5">Date formation</label><input type="date" value={active.date_formation} onChange={e=>updRole(role,"date_formation",e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
                         <div><label className="text-xs text-gray-400 block mb-0.5">Date début</label><input type="date" value={active.date_debut} onChange={e=>updRole(role,"date_debut",e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-300"/></div>
@@ -3180,7 +3458,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             </div>}
 
             <div className="flex gap-2">
-              <button onClick={submit} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors">{editId?"✓ Enregistrer les modifications":"✅ Créer l'adhérent"}</button>
+              <button onClick={submit} disabled={isReadOnly} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors">{editId?"✓ Enregistrer les modifications":"✅ Créer l'adhérent"}</button>
               {editId && <button onClick={resetForm} className="text-sm text-gray-500 hover:text-gray-700 px-4">Annuler</button>}
             </div>
           </div>
@@ -3189,29 +3467,34 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
               <h4 className="font-semibold text-gray-700 text-sm">📋 Liste des adhérents ({filteredRows.length})</h4>
-              <div className="flex gap-2">
-                <button onClick={()=>{setFilters({});setSortCol(null);setSortDir("asc");}} className="text-xs text-gray-500 hover:text-gray-700 font-medium border border-gray-200 rounded-lg px-3 py-1.5">🗑️ Supprimer tous les filtres</button>
+              <div className="flex gap-2 items-center flex-wrap">
+                <label className="text-xs text-gray-500">Année :</label>
+                <select value={anneeFiltre} onChange={e=>setAnneeFiltre(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                  <option value="">Toutes</option>
+                  {anneesDisponiblesAdh.map(a=><option key={a} value={a}>{a}</option>)}
+                </select>
+                <button onClick={()=>{setFilters({});setAnneeFiltre("");setSortCol(null);setSortDir("asc");}} className="text-xs text-gray-500 hover:text-gray-700 font-medium border border-gray-200 rounded-lg px-3 py-1.5">🗑️ Supprimer tous les filtres</button>
                 <button onClick={()=>resetForm()} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">+ Nouvel adhérent</button>
               </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="bg-gray-50">{COLS.map(c=>(
+                  <tr className="bg-gray-50"><th className="px-2 py-2"></th>{COLS.map(c=>(
                     <th key={c.k} className={`text-left px-2 py-2 text-gray-500 uppercase tracking-wide font-semibold ${c.w} ${c.sortable?"cursor-pointer hover:text-indigo-600 select-none":""}`} onClick={()=>c.sortable&&toggleSort(c.k)}>
                       {c.label}{c.sortable?sortIcon(c.k):""}
                     </th>
-                  ))}<th className="px-2 py-2"></th></tr>
+                  ))}</tr>
                   <tr className="bg-white">
+                    <td></td>
                     {COLS.map(c=>(
                       <td key={c.k} className="px-2 py-1">
                         {c.type==="select"
                           ? <select value={filters[c.k]||""} onChange={e=>setFilters(f=>({...f,[c.k]:e.target.value}))} className="w-full border border-gray-200 rounded px-1 py-1 text-xs"><option value="">Tous</option>{c.options.map(([v,lbl])=><option key={v} value={v}>{lbl}</option>)}</select>
-                          : c.k.startsWith("_role_")||c.k==="created_at" ? null
+                          : c.k.startsWith("_role_")||c.k==="_interets"||c.k==="created_at" ? null
                           : <input value={filters[c.k]||""} onChange={e=>setFilters(f=>({...f,[c.k]:e.target.value}))} placeholder="filtrer…" className="w-full border border-gray-200 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-300"/>}
                       </td>
                     ))}
-                    <td></td>
                   </tr>
                 </thead>
                 <tbody>
@@ -3219,6 +3502,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                     const ben = getRoleInfo(r,"Bénévole"), tal = getRoleInfo(r,"Talentueux"), tis = getRoleInfo(r,"Tisseur de lien");
                     return (
                     <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50">
+                      <td className="px-2 py-2 flex gap-1">
+                        {!isReadOnly && <button onClick={()=>editRow(r)} className="text-indigo-400 hover:text-indigo-600" title="Modifier">✏️</button>}
+                        {!isReadOnly && <button onClick={()=>delRow(r.id)} className="text-rose-400 hover:text-rose-600" title="Supprimer">✕</button>}
+                        {!isReadOnly && <button onClick={()=>duplicateRow(r)} className="text-emerald-500 hover:text-emerald-700" title="Dupliquer (renouvellement année suivante)">📋</button>}
+                        {r.structure && <button onClick={()=>setPrintDoc(r)} className="text-gray-400 hover:text-gray-600" title="Imprimer le justificatif">🖨️</button>}
+                      </td>
                       <td className="px-2 py-2">{r.date_adhesion}</td>
                       <td className="px-2 py-2">{r.structure?"🏢 Structure":"👤 Indiv."}</td>
                       <td className="px-2 py-2">{r.civilite}</td>
@@ -3238,16 +3527,14 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                       <td className="px-2 py-2">{r.renouvellement?"✓":""}</td>
                       <td className="px-2 py-2 truncate max-w-28">{(r.reseaux||[]).join(", ")}</td>
                       <td className="px-2 py-2">{r.de_passage?"✓":""}</td>
+                      <td className="px-2 py-2">{r.resident?"✓":""}</td>
                       <td className="px-2 py-2 truncate max-w-28">{r.source_arrivee}</td>
                       <td className="px-2 py-2">{ben?`✓ ${ben.date_debut||""}`:""}</td>
                       <td className="px-2 py-2">{tal?`✓ ${tal.date_debut||""}`:""}</td>
                       <td className="px-2 py-2">{tis?`✓ ${tis.date_debut||""}`:""}</td>
+                      <td className="px-2 py-2 truncate max-w-32 text-amber-700">{(r.interets||[]).join(", ")}</td>
                       <td className="px-2 py-2 truncate max-w-32">{r.talents}</td>
                       <td className="px-2 py-2">{r.created_at?r.created_at.slice(0,10).split("-").reverse().join("/"):""}</td>
-                      <td className="px-2 py-2 flex gap-1">
-                        <button onClick={()=>editRow(r)} className="text-indigo-400 hover:text-indigo-600">✏️</button>
-                        <button onClick={()=>delRow(r.id)} className="text-rose-400 hover:text-rose-600">✕</button>
-                      </td>
                     </tr>
                   );})}
                   {filteredRows.length===0 && <tr><td colSpan={COLS.length+1} className="text-center py-6 text-gray-400">Aucun adhérent ne correspond aux filtres.</td></tr>}
@@ -3380,7 +3667,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
     };
 
     /* ── SECTION RESTAURATION COLLECTIVE ── */
-    const SectionRestoCollective = ({ cafe, carte, refreshTick=0 }) => {
+    const SectionRestoCollective = ({ cafe, carte, refreshTick=0, isReadOnly=false, by="" }) => {
       const [rows,setRows]     = useState([]);
       const [loading,setLoading] = useState(true);
       const [confirmId,setConfirmId] = useState(null);
@@ -3423,7 +3710,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const rem = (i)=>setPanier(p=>p.filter((_,j)=>j!==i));
 
       const valider = async () => {
-        if(!panier.length||!date) return;
+        if(isReadOnly||!panier.length||!date) return;
         const now=Date.now();
         const nr=panier.map((l,i)=>({
           id:now+i, date, semaine:getWeekForDate(date), mois:getMonthForDate(date),
@@ -3443,7 +3730,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
        
       };
 
-      const del = async(id)=>{ setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"restocollective",u); };
+      const del = async(id)=>{ if(isReadOnly)return; setConfirmId(null); const u=rows.filter(r=>r.id!==id); setRows(u); await saveData(cafe,"restocollective",u); };
 
       if(loading) return <div className="p-8 text-center text-gray-400">Chargement...</div>;
 
@@ -3520,7 +3807,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 <div><label className="text-xs text-gray-500 block mb-1 font-medium">Mode de règlement *</label>
                   <select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border-2 border-orange-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-orange-400 bg-orange-50">{MODES.map(m=><option key={m}>{m}</option>)}</select>
                 </div>
-                <button onClick={valider} disabled={!panier.length} className="bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors">✅ Valider & enregistrer</button>
+                <button onClick={valider} disabled={!panier.length||isReadOnly} className="bg-orange-500 hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors">✅ Valider & enregistrer</button>
                 {panier.length>0&&<button onClick={()=>setPanier([])} className="text-xs text-gray-400 hover:text-gray-600 text-center">Vider le panier</button>}
               </div>
             </div>
@@ -3573,7 +3860,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       const [menuOpen,setMenuOpen]   = useState(false);
       const [globalView,setGlobalView] = useState(()=>{
         const s = loadSession();
-        return s?.role==="admin" || s?.role==="operations";
+        return s?.role==="admin" || s?.role==="operations" || s?.role==="directeur";
       });
       const [rcEnabled,setRcEnabled] = useState({});
       const [saveError,setSaveError] = useState(null);
@@ -3588,7 +3875,12 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       // Roles
       const isAdmin = session?.role === "admin";
       const isOps   = session?.role === "operations";
-      const isMulti = isAdmin || isOps;
+      const isDirecteur = session?.role === "directeur";
+      const isReadOnly = isDirecteur;
+      const isMulti = isAdmin || isOps || isDirecteur;
+
+      // Propage le rôle courant au verrou de sécurité de saveData (défense en profondeur)
+      useEffect(()=>{ setCurrentRole(session?.role||null); }, [session]);
       const activeCafe = isMulti ? (selCafe || cafes[0]) : (session?.cafe || null);
       const rcOn = activeCafe ? (rcEnabled[activeCafe] || false) : false;
       const TABS = rcOn ? [...TABS_BASE, {id:"restocollective",label:"\u{1F37D}\uFE0F Resto Coll."}] : TABS_BASE;
@@ -3618,13 +3910,20 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
           setSaveError("💾 Sauvegarde en cours…");
           setTimeout(()=>setSaveError(null), 5000);
         };
+        const onReadOnlyBlock = () => {
+          setSaving(false);
+          setSaveError("🔒 Mode lecture seule (Directeur) — modification impossible.");
+          setTimeout(()=>setSaveError(null), 4000);
+        };
         window.addEventListener("daddy_save_start", onStart);
         window.addEventListener("daddy_save_done",  onDone);
         window.addEventListener("daddy_save_error", onError);
+        window.addEventListener("daddy_readonly_block", onReadOnlyBlock);
         return () => {
           window.removeEventListener("daddy_save_start", onStart);
           window.removeEventListener("daddy_save_done",  onDone);
           window.removeEventListener("daddy_save_error", onError);
+          window.removeEventListener("daddy_readonly_block", onReadOnlyBlock);
         };
       }, []);
 
@@ -3693,7 +3992,7 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
       if (!session) {
                         return <LoginScreen onLogin={s=>{
           setSession(s);
-          if(s.role==="admin" || s.role==="operations") {
+          if(s.role==="admin" || s.role==="operations" || s.role==="directeur") {
             setSelCafe(cafes[0]||null);
             setSubTabAdmin("dashboard");
             setGlobalView(true);
@@ -3716,11 +4015,15 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
         setCafeRefreshTick(t=>t+1);
       };
 
-      const headerStyle = (globalView || isAdmin)
+      const headerStyle = isAdmin
         ? { background: `linear-gradient(to right, ${ADMIN_COLOR}, #8B1a1f)` }
-        : isOps
-          ? { background: `linear-gradient(to right, #284351, #3a5f70)` }
-          : getCafeHeaderStyle(activeCafe||cafes[0], cafes);
+        : isDirecteur
+          ? { background: `linear-gradient(to right, #475569, #64748b)` }
+          : (globalView || isOps)
+            ? isOps
+              ? { background: `linear-gradient(to right, #284351, #3a5f70)` }
+              : { background: `linear-gradient(to right, ${ADMIN_COLOR}, #8B1a1f)` }
+            : getCafeHeaderStyle(activeCafe||cafes[0], cafes);
 
       return (
         <div className="min-h-screen bg-gray-50 font-sans">
@@ -3770,9 +4073,11 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
                 </div>
               </div>
               {/* Sous-titre selon rôle */}
-              {!isAdmin&&!isOps&&!globalView&&<p className="text-xs opacity-75 mt-1">☕ {session.cafe}</p>}
+              {!isAdmin&&!isOps&&!isDirecteur&&!globalView&&<p className="text-xs opacity-75 mt-1">☕ {session.cafe}</p>}
               {isAdmin&&!globalView&&<p className="text-xs opacity-75 mt-1">👑 Administrateur — {activeCafe}</p>}
               {isOps&&!globalView&&<p className="text-xs opacity-75 mt-1">⚙️ Opérations — {activeCafe}</p>}
+              {isDirecteur&&!globalView&&<p className="text-xs opacity-75 mt-1">🔒 Directeur (lecture seule) — {activeCafe}</p>}
+              {isDirecteur&&globalView&&<p className="text-xs opacity-75 mt-1">🔒 Directeur (lecture seule)</p>}
               {!globalView&&(
                 <nav className="flex gap-1 mt-3 overflow-x-auto pb-1">
                   {TABS.map(t=>(
@@ -3793,22 +4098,22 @@ GRANT ALL ON daddy_data TO anon;`}</pre>
             {globalView?(
               <>
                 <div className="mb-4 flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full" style={{backgroundColor:ADMIN_COLOR}}></span><h2 className="text-sm font-semibold text-gray-600">Vue globale — Tous les cafés</h2></div>
-                <ErrorBoundary><DashboardGlobal cafes={cafes} onCafeCreated={setCafes} isAdmin={isAdmin} supaStatus={supaStatus} initialSubTab={subTabAdmin} onSubTabChange={setSubTabAdmin} allCafesData={allCafesData} allCafesLoading={allCafesLoading} onForceRefresh={()=>loadAllCafes(true)}/></ErrorBoundary>
+                <ErrorBoundary><DashboardGlobal cafes={cafes} onCafeCreated={setCafes} isAdmin={isAdmin} supaStatus={supaStatus} initialSubTab={subTabAdmin} onSubTabChange={setSubTabAdmin} allCafesData={allCafesData} allCafesLoading={allCafesLoading} onForceRefresh={()=>loadAllCafes(true)} isReadOnly={isReadOnly}/></ErrorBoundary>
               </>
             ):(
               <>
-                <div className="mb-4 flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full" style={{backgroundColor:getCafeDotColor(activeCafe,cafes)}}></span><h2 className="text-sm font-semibold text-gray-600">{activeCafe} — {TABS.find(t=>t.id===tab)?.label}</h2></div>
+                <div className="mb-4 flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full" style={{backgroundColor:getCafeDotColor(activeCafe,cafes)}}></span><h2 className="text-sm font-semibold text-gray-600">{activeCafe} — {TABS.find(t=>t.id===tab)?.label}</h2>{isReadOnly&&<span className="text-xs bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-full">🔒 Lecture seule</span>}</div>
                 {!carteLoaded?<div className="p-8 text-center text-gray-400">Chargement...</div>
                   :tab==="dashboard"     ?<Dashboard cafe={activeCafe} rcOn={rcOn} refreshTick={cafeRefreshTick}/>
-                  :tab==="caisseta"      ?<SectionCaisseTA cafe={activeCafe} carte={carte} refreshTick={cafeRefreshTick}/>
-                  :tab==="tcam"          ?<SectionTCAM cafe={activeCafe} refreshTick={cafeRefreshTick}/>
-                  :tab==="dons"          ?<SectionDons cafe={activeCafe} refreshTick={cafeRefreshTick}/>
-                  :tab==="achats"        ?<SectionAchats cafe={activeCafe} refreshTick={cafeRefreshTick}/>
-                  :tab==="privatisation" ?<SectionPrivatisation cafe={activeCafe} refreshTick={cafeRefreshTick}/>
-                  :tab==="carte"         ?<SectionCarte cafe={activeCafe} carte={carte} setCarte={setCarte}/>
-                  :tab==="monnaie"       ?<SectionMonnaie cafe={activeCafe}/>
-                  :tab==="adhesion"      ?<SectionAdhesion cafe={activeCafe} refreshTick={cafeRefreshTick} cafes={cafes}/>
-                  :tab==="restocollective"?<SectionRestoCollective cafe={activeCafe} carte={carte} refreshTick={cafeRefreshTick}/>
+                  :tab==="caisseta"      ?<SectionCaisseTA cafe={activeCafe} carte={carte} refreshTick={cafeRefreshTick} isReadOnly={isReadOnly} by={session?.login||""}/>
+                  :tab==="tcam"          ?<SectionTCAM cafe={activeCafe} refreshTick={cafeRefreshTick} isReadOnly={isReadOnly} by={session?.login||""}/>
+                  :tab==="dons"          ?<SectionDons cafe={activeCafe} refreshTick={cafeRefreshTick} isReadOnly={isReadOnly} by={session?.login||""}/>
+                  :tab==="achats"        ?<SectionAchats cafe={activeCafe} refreshTick={cafeRefreshTick} isReadOnly={isReadOnly} by={session?.login||""}/>
+                  :tab==="privatisation" ?<SectionPrivatisation cafe={activeCafe} refreshTick={cafeRefreshTick} isReadOnly={isReadOnly} by={session?.login||""}/>
+                  :tab==="carte"         ?<SectionCarte cafe={activeCafe} carte={carte} setCarte={setCarte} isReadOnly={isReadOnly}/>
+                  :tab==="monnaie"       ?<SectionMonnaie cafe={activeCafe} isReadOnly={isReadOnly}/>
+                  :tab==="adhesion"      ?<SectionAdhesion cafe={activeCafe} refreshTick={cafeRefreshTick} cafes={cafes} isReadOnly={isReadOnly} by={session?.login||""}/>
+                  :tab==="restocollective"?<SectionRestoCollective cafe={activeCafe} carte={carte} refreshTick={cafeRefreshTick} isReadOnly={isReadOnly} by={session?.login||""}/>
                   :null
                 }
               </>
